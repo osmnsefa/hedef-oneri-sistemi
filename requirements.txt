@@ -1,0 +1,13 @@
+pandas
+openpyxl
+python-docx
+langchain
+langchain-community
+langchain-huggingface
+chromadb
+sentence-transformers
+streamlit
+requests
+openai
+python-dotenv
+groq
