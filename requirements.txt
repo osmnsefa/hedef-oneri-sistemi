@@ -11,3 +11,5 @@ requests
 openai
 python-dotenv
 groq
+langchain-text-splitters
+tabulate
