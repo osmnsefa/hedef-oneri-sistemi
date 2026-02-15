@@ -30,8 +30,10 @@ share/python-wheels/
 
 # Proje Özgü (Veriler ve Gizli Bilgiler)
 # guncel_veriler/  <-- BURAYA # KOYDUK (Artık GitHub'a gidecek)
-chroma_db/         <-- BU KALSIN (Aşağıda nedenini açıkladım)
-.env               <-- BU KESİNLİKLE KALSIN (Şifrelerin çalınır!)
+chroma_db/
+__pycache__/
+.env
+venv/
 
 # VS Code
 .vscode/
