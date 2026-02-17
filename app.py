@@ -116,9 +116,23 @@ with main_col1:
                         # Geçmiş veriyi çek ve metne çevir (Markdown tablosu olarak)
                         history_df = load_history_cached(employee_name, target_type)
                         history_text = history_df.to_markdown(index=False) if not history_df.empty else ""
+
+                        # Metadata Çek ve Ekle
+                        loader = DataLoader() # Cachelenmemiş taze veri için
+                        metadata = loader.get_employee_metadata(employee_name)
+                        
+                        metadata_text = ""
+                        if metadata:
+                            metadata_text = "=== ÇALIŞAN KİMLİK KARTI ===\n"
+                            for k, v in metadata.items():
+                                metadata_text += f"{k}: {v}\n"
+                            metadata_text += "===========================\n\n"
+                        
+                        # Metadata'yı history_text'in başına ekle (veya ayrı parametre yapabiliriz ama bu daha kolay)
+                        full_context_text = metadata_text + history_text
                         
                         suggestion = analyzer.analyze_and_suggest(
-                            employee_name, target_type, manager_vision, history_text
+                            employee_name, target_type, manager_vision, full_context_text
                         )
                         
                         st.session_state.last_analysis = suggestion
@@ -144,9 +158,21 @@ with main_col1:
                     try:
                         history_df = load_history_cached(employee_name, target_type)
                         history_text = history_df.to_markdown(index=False) if not history_df.empty else ""
+
+                        # Metadata Çek ve Ekle
+                        loader = DataLoader()
+                        metadata = loader.get_employee_metadata(employee_name)
+                        metadata_text = ""
+                        if metadata:
+                            metadata_text = "=== ÇALIŞAN KİMLİK KARTI ===\n"
+                            for k, v in metadata.items():
+                                metadata_text += f"{k}: {v}\n"
+                            metadata_text += "===========================\n\n"
+                        
+                        full_context_text = metadata_text + history_text
                         
                         analysis_result = analyzer.analyze_performance(
-                            employee_name, target_type, history_text
+                            employee_name, target_type, full_context_text
                         )
                         st.session_state.performance_analysis = analysis_result
                     except Exception as e:
@@ -187,7 +213,7 @@ with main_col2:
                 st.markdown(msg)
 
     # Yeni Mesaj Girişi
-    if prompt := st.chat_input("Örn: Bu hedefleri daha agresif hale getirebilir miyiz?"):
+    if prompt := st.chat_input("Sohbete devam etmek ister misiniz?"):
         st.session_state.chat_history.append(("Kullanıcı", prompt))
         with chat_container:
             with st.chat_message("user", avatar="👤"):
@@ -195,10 +221,18 @@ with main_col2:
             
         with st.spinner("Yanıtlanıyor..."):
             try:
+                # Sohbet için de Metadata ekleyelim
+                loader = DataLoader()
+                metadata = loader.get_employee_metadata(employee_name)
+                metadata_context = ""
+                if metadata:
+                    metadata_context = f"Çalışan Bilgileri: {metadata}"
+
                 response = analyzer.chat_with_data(
                     prompt, 
                     st.session_state.chat_history[:-1], 
-                    employee_name if employee_name else "Genel"
+                    employee_name if employee_name else "Genel",
+                    metadata_context=metadata_context
                 )
                 
                 st.session_state.chat_history.append(("Asistan", response))

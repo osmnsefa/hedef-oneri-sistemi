@@ -143,7 +143,7 @@ class Analyzer:
             temperature=0.4
         )
 
-    def chat_with_data(self, message, history, employee_name):
+    def chat_with_data(self, message, history, employee_name, metadata_context=""):
         """
         Sohbet botu fonksiyonu.
         """
@@ -152,6 +152,9 @@ class Analyzer:
         dynamic_system = MASTERMIND_PROMPT + f"""
         HATIRLATMA:
         Şu an {employee_name} isimli çalışan hakkında konuşuyorsun.
+        
+        {metadata_context}
+        
         Kullanıcı sana soru soruyor. RAG ile çektiğimiz şu verilere bakarak cevap ver:
         
         {context}

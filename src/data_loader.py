@@ -148,3 +148,38 @@ class DataLoader:
                     logger.error(f"Geçmiş verisi okuma hatası ({filename}): {str(e)}")
                     
         return history_df
+
+    def get_employee_metadata(self, employee_name):
+        """Çalışanın kimlik bilgilerini (Unvan, Bölüm, Sicil) döner."""
+        metadata = {}
+        
+        if not os.path.exists(self.data_dir):
+            return metadata
+
+        for filename in os.listdir(self.data_dir):
+            if filename.endswith(('.xlsx', '.xls')) and not filename.startswith('~$'):
+                file_path = os.path.join(self.data_dir, filename)
+                try:
+                    df = pd.read_excel(file_path).fillna("")
+                    name_col = 'İsim' if 'İsim' in df.columns else 'Ad Soyad'
+                    
+                    if name_col in df.columns:
+                        # Çalışana göre filtrele
+                        person_row = df[df[name_col] == employee_name]
+                        
+                        if not person_row.empty:
+                            row = person_row.iloc[0]
+                            # İstenen sütunlar
+                            target_cols = ['Sicil', 'Unvan', 'Bölüm Ana Sorumluluk Alanı']
+                            for col in target_cols:
+                                if col in df.columns:
+                                    metadata[col] = row[col]
+                            
+                            # Bulduysak çıkalım (ilk eşleşme yeterli varsayımı)
+                            if metadata:
+                                return metadata
+                            
+                except Exception as e:
+                    logger.error(f"Metadata okuma hatası ({filename}): {str(e)}")
+                    
+        return metadata
