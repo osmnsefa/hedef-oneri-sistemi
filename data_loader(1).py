@@ -16,7 +16,7 @@ class DataLoader:
         )
         
     def load_excel_data(self):
-        """Excel dosyalarından her satırı ayrı bir döküman olarak çıkarır."""
+        """Excel dosyalarından yapılandırılmış metin verisi çıkarır."""
         documents = []
         if not os.path.exists(self.data_dir):
             logger.warning(f"Veri klasörü bulunamadı: {self.data_dir}")
@@ -26,37 +26,24 @@ class DataLoader:
             if filename.endswith(('.xlsx', '.xls')) and not filename.startswith('~$'):
                 file_path = os.path.join(self.data_dir, filename)
                 try:
+                    # Excel'i oku, NaN değerleri boş string yap
                     df = pd.read_excel(file_path).fillna("")
+                    
+                    # Her satırı anlamlı bir metne dönüştür
+                    text_content = f"--- DOSYA: {filename} ---\n"
                     columns = df.columns.tolist()
                     
-                    # Kolon isimlerini temizle (boşluk vs)
-                    df.columns = [str(c).strip() for c in df.columns]
-                    columns = df.columns.tolist()
-
                     for index, row in df.iterrows():
                         row_text = []
-                        metadata_name = ""
-                        
-                        # İsim tespiti için daha esnek kontrol
-                        name_col = next((c for c in columns if c.lower() in ['isim', 'ad soyad', 'çalışan']), None)
-                        if name_col:
-                            metadata_name = str(row[name_col]).strip()
-
                         for col in columns:
-                            val = str(row[col]).strip()
-                            if val and val.lower() != "nan":
-                                row_text.append(f"{col}: {val}")
+                            if row[col]: # Boş değilse ekle
+                                row_text.append(f"{col}: {row[col]}")
                         
                         if row_text:
-                            content = " | ".join(row_text)
-                            documents.append({
-                                "source": filename, 
-                                "content": content,
-                                "employee": metadata_name,
-                                "is_excel": True # Excel olduğunu işaretle
-                            })
+                            text_content += " | ".join(row_text) + "\n"
                     
-                    logger.info(f"✅ Excel yüklendi: {filename} ({len(df)} satır)")
+                    documents.append({"source": filename, "content": text_content})
+                    logger.info(f"✅ Excel yüklendi: {filename}")
                 except Exception as e:
                     logger.error(f"❌ Excel okuma hatası ({filename}): {str(e)}")
         return documents
@@ -89,33 +76,20 @@ class DataLoader:
         return documents
 
     def get_chunked_documents(self):
-        """Tüm verileri yükler ve RAG için hazırlar."""
-        excel_docs = self.load_excel_data()
-        word_docs = self.load_word_data()
+        """Tüm verileri yükler ve RAG için parçalar."""
+        raw_docs = self.load_excel_data() + self.load_word_data()
+        chunked_docs = []
         
-        final_docs = []
-        
-        # Excel verilerini doğrudan (split etmeden) ekle
-        for doc in excel_docs:
-            final_docs.append({
-                "page_content": doc['content'],
-                "metadata": {
-                    "source": doc['source'],
-                    "employee": doc.get('employee', 'Bilinmeyen')
-                }
-            })
-            
-        # Word verilerini split ederek ekle
-        for doc in word_docs:
+        for doc in raw_docs:
             chunks = self.text_splitter.split_text(doc['content'])
             for chunk in chunks:
-                final_docs.append({
+                chunked_docs.append({
                     "page_content": chunk,
                     "metadata": {"source": doc['source']}
                 })
                 
-        logger.info(f"Toplam {len(final_docs)} döküman hazırlandı.")
-        return final_docs
+        logger.info(f"Toplam {len(chunked_docs)} chunk oluşturuldu.")
+        return chunked_docs
 
     def get_dropdown_options(self):
         """Excel'den benzersiz Çalışan isimlerini ve Hedef Türlerini çeker."""

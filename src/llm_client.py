@@ -14,13 +14,13 @@ class LLMClient:
         else:
             self.client = Groq(api_key=api_key)
         
-    def generate_response(self, system_prompt, user_prompt, temperature=0.7):
+    def generate_response(self, system_prompt, user_prompt, temperature=0.7, json_mode=False):
         if not self.client:
             return "⚠️ Hata: Groq API Key eksik. Lütfen .env dosyasını yapılandırın."
 
         try:
-            chat_completion = self.client.chat.completions.create(
-                messages=[
+            request_params = {
+                "messages": [
                     {
                         "role": "system",
                         "content": system_prompt,
@@ -30,9 +30,14 @@ class LLMClient:
                         "content": user_prompt,
                     }
                 ],
-                model=Config.MODEL_NAME,
-                temperature=temperature,
-            )
+                "model": Config.MODEL_NAME,
+                "temperature": temperature,
+            }
+
+            if json_mode:
+                request_params["response_format"] = {"type": "json_object"}
+
+            chat_completion = self.client.chat.completions.create(**request_params)
             
             return chat_completion.choices[0].message.content
             

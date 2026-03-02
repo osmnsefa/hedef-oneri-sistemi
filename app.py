@@ -1,10 +1,9 @@
 import streamlit as st
 import pandas as pd
 from src.config import Config
-from src.ui_components import load_custom_css, render_header
+from src.ui_components import load_custom_css, render_header, display_chat_message
 from src.analysis import Analyzer
 from src.data_loader import DataLoader
-import os
 
 # Sayfa Ayarları (En başta olmalı)
 st.set_page_config(
@@ -14,230 +13,363 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Özel CSS'i yükle
 load_custom_css()
 
-# --- OPTİMİZASYON VE CACHING ---
+# ==============================================================================
+# CACHING
+# ==============================================================================
 
-@st.cache_resource(show_spinner="Sistem Başlatılıyor...")
+@st.cache_resource(show_spinner="⚙️ Sistem başlatılıyor...")
 def get_analyzer():
-    """Analyzer sınıfını önbelleğe alır. (VectorStore ve LLM bağlantısı tek sefer yapılır)"""
     return Analyzer()
 
-@st.cache_data(ttl=600)  # 10 dakika önbellekte tut
+@st.cache_data(ttl=600)
 def load_metadata_cached():
-    """Dropdown verilerini önbelleğe alır."""
     loader = DataLoader()
     return loader.get_dropdown_options()
 
 @st.cache_data(ttl=600)
 def load_history_cached(name, target):
-    """Geçmiş verileri önbelleğe alır."""
-    loader = DataLoader() # DataLoader hafif olduğu için burada tekrar instance alınabilir
+    loader = DataLoader()
     return loader.get_employee_history(name, target)
 
-# --- UYGULAMA MANTIĞI ---
+@st.cache_data(ttl=600)
+def load_employee_metadata_cached(name):
+    loader = DataLoader()
+    return loader.get_employee_metadata(name)
 
-# Analyzer'ı al (Cached Resource)
+# ==============================================================================
+# UYGULAMA BAŞLATMA
+# ==============================================================================
+
 analyzer = get_analyzer()
 
-# Session State Başlatma
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-if "last_analysis" not in st.session_state: # Hata almamak için opsiyonel başlatma
-    st.session_state.last_analysis = None
+# Session State
+def init_session():
+    defaults = {
+        "chat_history": [],      # [(user_msg, bot_msg), ...]
+        "last_analysis": None,
+        "current_goal_set": None,
+        "proposed_patch": None,
+        "eval_result": None,
+        "perf_res": None,
+        "active_employee": "",
+        "active_target": "",
+    }
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
 
-# Metadata Yükle (Cached Data)
+init_session()
+
+# Veri Yükle
 employees_list, target_types_list = load_metadata_cached()
 
-# Yan Menü (Sidebar)
+# ==============================================================================
+# SIDEBAR
+# ==============================================================================
+
 with st.sidebar:
-    st.title("🎛️ Kontrol Paneli")
-    st.markdown("---")
-    
+    st.markdown("""
+    <div style="padding: 0.5rem 0 1rem 0;">
+        <h2 style="font-size:1.3rem; font-weight:800; margin:0; color:white;">🎛️ Kontrol Paneli</h2>
+        <p style="font-size:0.78rem; color:rgba(255,255,255,0.5); margin:0.2rem 0 0 0;">Parametreleri seçin</p>
+    </div>
+    """, unsafe_allow_html=True)
+
     # Çalışan Seçimi
     if employees_list:
-        employee_name = st.selectbox("Çalışan Adı Soyadı", employees_list)
+        employee_name = st.selectbox("Çalışan", employees_list)
     else:
         employee_name = st.text_input("Çalışan Adı Soyadı", placeholder="Örn: Ahmet Yılmaz")
-        if not employees_list:
-            st.warning("Excel dosyasından çalışan listesi çekilemedi.")
-    
+        st.warning("Excel'den çalışan listesi çekilemedi.")
+
     # Hedef Kategorisi
     default_targets = ["Satış & Pazarlama", "Yazılım Geliştirme", "Operasyonel Verimlilik"]
     options = target_types_list if target_types_list else default_targets
     target_type = st.selectbox("Hedef Kategorisi", options)
-    
+
+    # Chat kısıtlaması için aktif oturumu senkronize et
+    if (st.session_state.active_employee != employee_name or
+            st.session_state.active_target != target_type):
+        st.session_state.active_employee = employee_name
+        st.session_state.active_target = target_type
+        # Çalışan/kategori değişince chat geçmişini sıfırla
+        st.session_state.chat_history = []
+        st.session_state.current_goal_set = None
+        st.session_state.proposed_patch = None
+        st.session_state.eval_result = None
+        st.session_state.perf_res = None
+
     manager_vision = st.text_area(
-        "Yönetici Vizyonu (Kuzey Yıldızı)",
-        placeholder="Örn: Global pazarda %15 büyüme hedeflerken, çalışan memnuniyetini de maksimum seviyede tutmak...",
-        height=150
+        "Yönetici Vizyonu",
+        placeholder="Örn: Global pazarda %15 büyüme hedeflerken çalışan memnuniyetini de en üst düzeyde tutmak...",
+        height=140
     )
-    
+
     st.markdown("---")
+
     col_s1, col_s2 = st.columns(2)
     with col_s1:
-        if st.button("♻️ Temizle"):
-             st.session_state.chat_history = []
-             st.session_state.last_analysis = None
-             st.rerun()
+        if st.button("♻️ Oturumu Temizle"):
+            for key in ["chat_history", "current_goal_set", "proposed_patch",
+                        "eval_result", "perf_res", "last_analysis"]:
+                st.session_state[key] = None if key != "chat_history" else []
+            st.rerun()
     with col_s2:
         if st.button("🔄 Veri İndeksle"):
             with st.spinner("İndeksleniyor..."):
                 try:
                     analyzer.vector_store.refresh_data()
-                    load_metadata_cached.clear() # Cache temizle
-                    st.success("Tamamlandı!")
+                    load_metadata_cached.clear()
+                    load_history_cached.clear()
+                    load_employee_metadata_cached.clear()
+                    st.success("✅ Veriler güncellendi!")
                     st.rerun()
                 except Exception as e:
                     st.error(f"Hata: {e}")
 
-# Ana Sayfa Düzeni
-render_header()
+    if st.button("🧹 Önbellek & Sistem Sıfırla", use_container_width=True):
+        st.cache_resource.clear()
+        st.cache_data.clear()
+        for key in ["chat_history", "current_goal_set", "proposed_patch",
+                    "eval_result", "perf_res", "last_analysis"]:
+            st.session_state[key] = None if key != "chat_history" else []
+        st.success("Sistem sıfırlandı!")
+        st.rerun()
 
-# İki Kolonlu Yapı
-main_col1, main_col2 = st.columns([4, 6], gap="medium")
+    st.markdown(f"""
+    <p style='text-align:center; color:rgba(255,255,255,0.3); font-size:0.72rem; margin-top:1rem;'>
+        Engine v{getattr(analyzer, 'version', '—')}
+    </p>
+    """, unsafe_allow_html=True)
 
-with main_col1:
-    st.markdown("### 🎯 Stratejik Hedef Sihirbazı")
-    st.info("Çalışan verilerini ve vizyonunuzu analiz ederek saniyeler içinde 'Kusursuz Hedefler' oluşturun.")
-    
-    # URL parametreleri veya Session State ile Sekme Yönetimi
-    tab1, tab2 = st.tabs(["📌 Hedef Önerisi Oluştur", "🔍 Güçlü/Zayıf Yön Analizi"])
-    
-    # --- SEKME 1: HEDEF ÖNERİSİ ---
-    with tab1:
-        if st.button("✨ Hedefleri Oluştur", use_container_width=True):
-            if not employee_name or not manager_vision:
-                st.error("Lütfen çalışan adı ve yönetici vizyonunu eksiksiz doldurunuz.")
-            else:
-                with st.spinner("🤖 Geçmiş veriler ve görev tanımları taranıyor..."):
-                    try:
-                        # Geçmiş veriyi çek ve metne çevir (Markdown tablosu olarak)
-                        history_df = load_history_cached(employee_name, target_type)
-                        history_text = history_df.to_markdown(index=False) if not history_df.empty else ""
+# ==============================================================================
+# ANA SAYFA
+# ==============================================================================
 
-                        # Metadata Çek ve Ekle
-                        loader = DataLoader() # Cachelenmemiş taze veri için
-                        metadata = loader.get_employee_metadata(employee_name)
-                        
-                        metadata_text = ""
-                        if metadata:
-                            metadata_text = "=== ÇALIŞAN KİMLİK KARTI ===\n"
-                            for k, v in metadata.items():
-                                metadata_text += f"{k}: {v}\n"
-                            metadata_text += "===========================\n\n"
-                        
-                        # Metadata'yı history_text'in başına ekle (veya ayrı parametre yapabiliriz ama bu daha kolay)
-                        full_context_text = metadata_text + history_text
-                        
-                        suggestion = analyzer.analyze_and_suggest(
-                            employee_name, target_type, manager_vision, full_context_text
-                        )
-                        
-                        st.session_state.last_analysis = suggestion
-                        st.session_state.chat_history.append(("Asistan", suggestion))
-                        st.success("Hedef Seti Hazırlandı!")
-                    except Exception as e:
-                        st.error(f"Bir hata oluştu: {e}")
+# Çalışan metadata'sını yükle (Unvan, Bölüm, Sicil)
+employee_metadata = {}
+if employee_name:
+    employee_metadata = load_employee_metadata_cached(employee_name)
 
-        # Son Analiz Sonucunu Göster (Varsa)
-        if st.session_state.last_analysis:
-            with st.expander("📝 Oluşturulan Hedefler", expanded=True):
-                st.markdown(st.session_state.last_analysis)
-    
-    # --- SEKME 2: PERFORMANS ANALİZİ ---
-    with tab2:
-        st.write(f"**{employee_name}** için **{target_type}** alanında detaylı performans analizi.")
-        
-        if st.button("📊 Analiz Et (Güçlü/Zayıf Yönler)", use_container_width=True):
-             if not employee_name:
-                st.error("Lütfen çalışan seçin.")
-             else:
-                with st.spinner("🕵️‍♂️ Detektif modunda analiz yapılıyor..."):
-                    try:
-                        history_df = load_history_cached(employee_name, target_type)
-                        history_text = history_df.to_markdown(index=False) if not history_df.empty else ""
+# Header (metadata bilgileri ile)
+render_header(
+    employee_name=employee_name,
+    target_type=target_type,
+    metadata=employee_metadata
+)
 
-                        # Metadata Çek ve Ekle
-                        loader = DataLoader()
-                        metadata = loader.get_employee_metadata(employee_name)
-                        metadata_text = ""
-                        if metadata:
-                            metadata_text = "=== ÇALIŞAN KİMLİK KARTI ===\n"
-                            for k, v in metadata.items():
-                                metadata_text += f"{k}: {v}\n"
-                            metadata_text += "===========================\n\n"
-                        
-                        full_context_text = metadata_text + history_text
-                        
-                        analysis_result = analyzer.analyze_performance(
-                            employee_name, target_type, full_context_text
-                        )
-                        st.session_state.performance_analysis = analysis_result
-                    except Exception as e:
-                        st.error(f"Analiz Hatası: {e}")
-        
-        if "performance_analysis" in st.session_state:
-             st.markdown(st.session_state.performance_analysis)
+# Metadata context string'i (chat için)
+metadata_ctx_parts = [f"Çalışan: {employee_name}"]
+if employee_metadata:
+    for k, v in employee_metadata.items():
+        if v:
+            metadata_ctx_parts.append(f"{k}: {v}")
+metadata_ctx_parts.append(f"Hedef Kategorisi: {target_type}")
+metadata_context_str = " | ".join(metadata_ctx_parts)
 
-    # GEÇMİŞ VERİ TABLOSU
-    st.markdown("---")
-    st.markdown(f"#### 📊 {employee_name} - {target_type} Verileri")
-    
-    if employee_name:
-        history_df = load_history_cached(employee_name, target_type)
-        if not history_df.empty:
-            st.dataframe(history_df, use_container_width=True, hide_index=True)
-        else:
-            st.info("Bu kriterlere uygun geçmiş sayısal veri bulunamadı.")
+# ==============================================================================
+# SEKMELER
+# ==============================================================================
+
+tab1, tab2, tab3 = st.tabs(["📌 Hedef Süreci", "🔍 Performans Analizi", "💬 Asistan"])
+
+# ====================== TAB 1: HEDEF SÜRECİ ======================
+with tab1:
+
+    # 1. BASELINE OLUŞTURMA
+    if not st.session_state.current_goal_set:
+        st.info("Henüz aktif bir hedef seti yok. Yönetici vizyonunu girin ve **'✨ Hedef Setini Başlat'** butonuna basın.")
+
+        if not manager_vision:
+            st.warning("⚠️ Soldan yönetici vizyonunu doldurun.")
+
+        if st.button("✨ Hedef Öner", use_container_width=True,
+                     disabled=not (employee_name and manager_vision)):
+            with st.spinner(f"🤖 {employee_name} için 3 SMART hedef oluşturuluyor..."):
+                history_df = load_history_cached(employee_name, target_type)
+                history_text = history_df.to_markdown(index=False) if not history_df.empty else "Sayısal veri yok."
+                goal_set = analyzer.analyze_and_suggest(employee_name, target_type, manager_vision, history_text)
+                st.session_state.current_goal_set = goal_set
+                st.rerun()
+
+    # 2. AKTİF HEDEF SETİ
     else:
-        st.info("Lütfen bir çalışan seçin.")
+        gs = st.session_state.current_goal_set
 
-with main_col2:
-    st.markdown("### 💬 Asistan ile Sohbet")
-    
-    # Sohbet Geçmişi Konteynerı
-    chat_container = st.container(height=600, border=True)
-    with chat_container:
-        if not st.session_state.chat_history:
-            st.markdown("""
-            <div style="text-align: center; color: #94a3b8; padding: 20px;">
-                Henüz bir sohbet başlamadı.<br>
-                Sol taraftan analiz başlatabilir veya aşağıdan soru sorabilirsiniz.
-            </div>
-            """, unsafe_allow_html=True)
-            
-        for role, msg in st.session_state.chat_history:
-            with st.chat_message("user" if role == "Kullanıcı" else "ai", avatar="👤" if role == "Kullanıcı" else "🤖"):
-                st.markdown(msg)
+        if "error" in gs:
+            st.error(f"Hedef seti üretilemedi: {gs.get('error')}")
+            if st.button("🔁 Tekrar Dene"):
+                st.session_state.current_goal_set = None
+                st.rerun()
+        else:
+            st.markdown(analyzer.format_goal_set(gs))
 
-    # Yeni Mesaj Girişi
-    if prompt := st.chat_input("Sohbete devam etmek ister misiniz?"):
-        st.session_state.chat_history.append(("Kullanıcı", prompt))
-        with chat_container:
-            with st.chat_message("user", avatar="👤"):
-                st.markdown(prompt)
-            
-        with st.spinner("Yanıtlanıyor..."):
-            try:
-                # Sohbet için de Metadata ekleyelim
-                loader = DataLoader()
-                metadata = loader.get_employee_metadata(employee_name)
-                metadata_context = ""
-                if metadata:
-                    metadata_context = f"Çalışan Bilgileri: {metadata}"
+            st.markdown("---")
+            col_act1, col_act2, col_act3 = st.columns(3)
 
-                response = analyzer.chat_with_data(
-                    prompt, 
-                    st.session_state.chat_history[:-1], 
-                    employee_name if employee_name else "Genel",
-                    metadata_context=metadata_context
+            with col_act1:
+                if st.button("🔍 Uygunluk Değerlendir", use_container_width=True):
+                    with st.spinner("Analiz ediliyor..."):
+                        eval_res = analyzer.evaluate_goals(gs, employee_name)
+                        st.session_state.eval_result = eval_res
+
+            with col_act2:
+                if st.button("✏️ Revizyon İste", use_container_width=True):
+                    st.session_state.show_revision_input = True
+
+            with col_act3:
+                if st.button("✅ Onayla & Kilitle", type="primary", use_container_width=True):
+                    st.session_state.current_goal_set["status"] = "ACTIVE"
+                    st.success("✅ Hedef Seti onaylandı ve ACTIVE olarak işaretlendi.")
+
+            # Değerlendirme Sonucu
+            if st.session_state.eval_result:
+                er = st.session_state.eval_result
+                if "error" in er:
+                    st.error(f"Değerlendirme üretilemedi: {er.get('error')}")
+                    if st.button("Tekrar Dene"):
+                        st.session_state.eval_result = None
+                        st.rerun()
+                else:
+                    with st.expander("📊 Sistem Değerlendirmesi", expanded=True):
+                        col_e1, col_e2 = st.columns(2)
+                        with col_e1:
+                            st.metric("Uygunluk", "✅ Uygun" if er.get("is_appropriate") else "⚠️ Riskli")
+                        with col_e2:
+                            st.metric("Risk Skoru", f"{er.get('risk_score', '?')}/10")
+                        st.write(f"**Analiz:** {er.get('analysis', '-')}")
+                        for s in er.get("improvement_suggestions", []):
+                            st.write(f"- {s}")
+                        if st.button("Kapat"):
+                            st.session_state.eval_result = None
+                            st.rerun()
+
+            # Revizyon Girişi
+            if st.session_state.get("show_revision_input"):
+                st.markdown("---")
+                feedback = st.text_area(
+                    "Yönetici Geri Bildirimi",
+                    placeholder="Örn: Hedef 1'deki rakam çok agresif, %15'e çekelim."
                 )
-                
-                st.session_state.chat_history.append(("Asistan", response))
-                with chat_container:
-                    with st.chat_message("ai", avatar="🤖"):
-                        st.markdown(response)
-            except Exception as e:
-                st.error(f"Hata: {e}")
+                col_rev1, col_rev2 = st.columns(2)
+                with col_rev1:
+                    if st.button("🚀 Revizyon Önerisi Üret", type="primary"):
+                        if not feedback.strip():
+                            st.error("Lütfen revizyon için bir geri bildirim girin.")
+                        else:
+                            with st.spinner("Patch hazırlanıyor..."):
+                                patch = analyzer.revise_goals(gs, feedback)
+                                st.session_state.proposed_patch = patch
+                                del st.session_state.show_revision_input
+                                st.rerun()
+                with col_rev2:
+                    if st.button("İptal Et"):
+                        del st.session_state.show_revision_input
+                        st.rerun()
+
+            # Patch Onay / Red
+            if st.session_state.proposed_patch:
+                st.info("Sistem bir revizyon (PATCH) önerdi. Lütfen aşağıdan inceleyip onaylayın.")
+                st.markdown(analyzer.format_patch(st.session_state.proposed_patch, gs))
+                col_p1, col_p2 = st.columns(2)
+                with col_p1:
+                    if st.button("✔️ Revizyonu Onayla"):
+                        patch = st.session_state.proposed_patch
+                        for ch in patch.get("changes", []):
+                            idx = ch.get("goal_index", 0)
+                            field = ch.get("field", "")
+                            new_val = ch.get("new_value")
+                            if idx < len(gs["goals"]):
+                                if field == "title":
+                                    gs["goals"][idx]["title"] = new_val
+                                elif field == "smart_goal":
+                                    gs["goals"][idx]["smart_goal"] = new_val
+                                elif "metrics.target_value" in field:
+                                    gs["goals"][idx]["metrics"]["target_value"] = new_val
+                        gs["version"] = patch.get("proposed_version", gs.get("version", 1) + 1)
+                        gs["status"] = "PROPOSED"
+                        st.session_state.current_goal_set = gs
+                        st.session_state.proposed_patch = None
+                        st.success("✅ Versiyon güncellendi!")
+                        st.rerun()
+                with col_p2:
+                    if st.button("❌ Revizyonu Reddet"):
+                        st.session_state.proposed_patch = None
+                        st.rerun()
+
+# ====================== TAB 2: PERFORMANS ANALİZİ ======================
+with tab2:
+    st.write(f"**{employee_name}** için `{target_type}` kategorisinde derinlemesine performans ve yetkinlik analizi.")
+
+    if st.button("📊 Analizi Başlat", use_container_width=True):
+        with st.spinner("🔍 Analiz ediliyor..."):
+            history_df = load_history_cached(employee_name, target_type)
+            history_text = history_df.to_markdown(index=False) if not history_df.empty else ""
+            res = analyzer.analyze_performance(employee_name, target_type, history_text)
+            st.session_state.perf_res = res
+
+    if st.session_state.perf_res:
+        st.markdown("---")
+        st.markdown(st.session_state.perf_res)
+
+    with st.expander("💾 Ham Performans Verileri", expanded=False):
+        if employee_name:
+            history_df = load_history_cached(employee_name, target_type)
+            if not history_df.empty:
+                st.dataframe(history_df, use_container_width=True)
+            else:
+                st.info("Bu çalışan ve kategori için geçmiş veri bulunamadı.")
+
+# ====================== TAB 3: CHAT ASISTAN ======================
+with tab3:
+    st.markdown(f"""
+    <div style="
+        background: linear-gradient(135deg, #f0f9ff, #e0f2fe);
+        border: 1px solid #bae6fd;
+        border-radius: 12px;
+        padding: 0.9rem 1.2rem;
+        margin-bottom: 1rem;
+    ">
+        <p style="margin:0; font-size:0.88rem; color:#0369a1;">
+            🔒 <b>Kısıtlı Oturum:</b> Bu asistan yalnızca
+            <b>{employee_name}</b> çalışanına ait <b>{target_type}</b>
+            verilerine erişebilir. Diğer çalışan ve kategoriler hakkında bilgi paylaşmaz.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Geçmiş mesajları göster (silinmez, kalıcı)
+    chat_placeholder = st.container()
+    with chat_placeholder:
+        for user_msg, bot_msg in st.session_state.chat_history:
+            display_chat_message("user", user_msg)
+            display_chat_message("bot", bot_msg)
+
+    # Yeni mesaj girişi
+    if prompt := st.chat_input(f"{employee_name} hakkında soru sorun..."):
+        # Kullanıcı mesajını hemen göster
+        display_chat_message("user", prompt)
+
+        with st.spinner("Yanıt üretiliyor..."):
+            response = analyzer.chat_with_data(
+                message=prompt,
+                history=st.session_state.chat_history,
+                employee_name=employee_name,
+                target_type=target_type,
+                metadata_context=metadata_context_str,
+                current_goal_set=st.session_state.current_goal_set
+            )
+
+        # Bot yanıtını göster
+        display_chat_message("bot", response)
+
+        # Geçmişe ekle (tuple olarak)
+        st.session_state.chat_history.append((prompt, response))
+        st.rerun()
+
+    if st.session_state.chat_history:
+        if st.button("🗑️ Sohbeti Temizle", use_container_width=False):
+            st.session_state.chat_history = []
+            st.rerun()
