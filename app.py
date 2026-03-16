@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from src.config import Config
-from src.ui_components import load_custom_css, render_header, display_chat_message
+from src.ui_components import load_custom_css, render_header, display_chat_message, render_dss_metrics
 from src.analysis import Analyzer
 from src.data_loader import DataLoader
 
@@ -173,10 +173,62 @@ metadata_context_str = " | ".join(metadata_ctx_parts)
 # SEKMELER
 # ==============================================================================
 
-tab1, tab2, tab3 = st.tabs(["📌 Hedef Süreci", "🔍 Performans Analizi", "💬 Asistan"])
+tab1, tab2, tab3 = st.tabs(["💬 Asistan", "📌 Hedef Süreci", "🔍 Performans Analizi"])
 
-# ====================== TAB 1: HEDEF SÜRECİ ======================
+# ====================== TAB 1: CHAT ASISTAN ======================
 with tab1:
+    st.markdown(f"""
+    <div style="
+        background: linear-gradient(135deg, #f0f9ff, #e0f2fe);
+        border: 1px solid #bae6fd;
+        border-radius: 12px;
+        padding: 0.9rem 1.2rem;
+        margin-bottom: 1rem;
+    ">
+        <p style="margin:0; font-size:1rem; color:#0369a1; font-weight:600;">
+            🔒 <b>Kısıtlı Oturum:</b> Bu asistan yalnızca
+            <b>{employee_name}</b> çalışanına ait <b>{target_type}</b>
+            verilerine erişebilir. Diğer çalışan ve kategoriler hakkında bilgi paylaşmaz.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Geçmiş mesajları göster (silinmez, kalıcı)
+    chat_placeholder = st.container()
+    with chat_placeholder:
+        for user_msg, bot_msg in st.session_state.chat_history:
+            display_chat_message("user", user_msg)
+            display_chat_message("bot", bot_msg)
+
+    # Yeni mesaj girişi
+    if prompt := st.chat_input(f"{employee_name} hakkında soru sorun..."):
+        # Kullanıcı mesajını hemen göster
+        display_chat_message("user", prompt)
+
+        with st.spinner("Yanıt üretiliyor..."):
+            response = analyzer.chat_with_data(
+                message=prompt,
+                history=st.session_state.chat_history,
+                employee_name=employee_name,
+                target_type=target_type,
+                metadata_context=metadata_context_str,
+                current_goal_set=st.session_state.current_goal_set
+            )
+
+        # Bot yanıtını göster
+        display_chat_message("bot", response)
+
+        # Geçmişe ekle (tuple olarak)
+        st.session_state.chat_history.append((prompt, response))
+        st.rerun()
+
+    if st.session_state.chat_history:
+        if st.button("🗑️ Sohbeti Temizle", use_container_width=False):
+            st.session_state.chat_history = []
+            st.rerun()
+
+# ====================== TAB 2: HEDEF SÜRECİ ======================
+with tab2:
 
     # 1. BASELINE OLUŞTURMA
     if not st.session_state.current_goal_set:
@@ -192,6 +244,14 @@ with tab1:
                 history_text = history_df.to_markdown(index=False) if not history_df.empty else "Sayısal veri yok."
                 goal_set = analyzer.analyze_and_suggest(employee_name, target_type, manager_vision, history_text)
                 st.session_state.current_goal_set = goal_set
+                
+                # Uretilen hedefleri asistan sekmesine de düşür
+                if goal_set and "error" not in goal_set:
+                    bot_msg = f"Sizin için **{target_type}** kategorisinde hedefler ürettim:\n\n"
+                    bot_msg += analyzer.format_goal_set(goal_set)
+                    bot_msg += "\n\nBu hedefler hakkında konuşmak veya revizyon istemek için bana sorular sorabilirsiniz."
+                    st.session_state.chat_history.append(("Bu çalışan için hedef önerir misin?", bot_msg))
+                    
                 st.rerun()
 
     # 2. AKTİF HEDEF SETİ
@@ -206,13 +266,21 @@ with tab1:
         else:
             st.markdown(analyzer.format_goal_set(gs))
 
+            # Karar Destek Sistemi (DSS) ve Risk Metrikleri
+            history_df = load_history_cached(employee_name, target_type)
+            suggested_goals_text = " ".join([g.get('smart_goal', '') for g in gs.get('goals', [])])
+            dss_metrics = analyzer.get_decision_support_metrics(history_df, suggested_goals_text)
+            
+            with st.expander("📊 Karar Destek Sistemi (Açıklanabilir YZ)", expanded=True):
+                render_dss_metrics(dss_metrics, employee_name)
+
             st.markdown("---")
             col_act1, col_act2, col_act3 = st.columns(3)
 
             with col_act1:
-                if st.button("🔍 Uygunluk Değerlendir", use_container_width=True):
+                if st.button("🔍 Uygunluk Değerlendir", type="secondary"):
                     with st.spinner("Analiz ediliyor..."):
-                        eval_res = analyzer.evaluate_goals(gs, employee_name)
+                        eval_res = analyzer.evaluate_goals(gs, employee_name, dss_metrics.get("risk_score"))
                         st.session_state.eval_result = eval_res
 
             with col_act2:
@@ -238,7 +306,7 @@ with tab1:
                         with col_e1:
                             st.metric("Uygunluk", "✅ Uygun" if er.get("is_appropriate") else "⚠️ Riskli")
                         with col_e2:
-                            st.metric("Risk Skoru", f"{er.get('risk_score', '?')}/10")
+                            st.metric("Risk Skoru (DSS)", f"%{dss_metrics.get('risk_score', '?')}")
                         st.write(f"**Analiz:** {er.get('analysis', '-')}")
                         for s in er.get("improvement_suggestions", []):
                             st.write(f"- {s}")
@@ -289,9 +357,15 @@ with tab1:
                                 elif "metrics.target_value" in field:
                                     gs["goals"][idx]["metrics"]["target_value"] = new_val
                         gs["version"] = patch.get("proposed_version", gs.get("version", 1) + 1)
-                        gs["status"] = "PROPOSED"
+                        gs["status"] = "ÖNERİLEN"
                         st.session_state.current_goal_set = gs
                         st.session_state.proposed_patch = None
+                        
+                        # Revize edilen hedefi chat'e at
+                        bot_msg = f"Hedefleriniz geri bildiriminiz doğrultusunda revize edildi (v{gs['version']}).\n\n"
+                        bot_msg += analyzer.format_goal_set(gs)
+                        st.session_state.chat_history.append(("Verdiğim geri bildirimi uygulayarak hedefleri revize et.", bot_msg))
+                        
                         st.success("✅ Versiyon güncellendi!")
                         st.rerun()
                 with col_p2:
@@ -299,8 +373,8 @@ with tab1:
                         st.session_state.proposed_patch = None
                         st.rerun()
 
-# ====================== TAB 2: PERFORMANS ANALİZİ ======================
-with tab2:
+# ====================== TAB 3: PERFORMANS ANALİZİ ======================
+with tab3:
     st.write(f"**{employee_name}** için `{target_type}` kategorisinde derinlemesine performans ve yetkinlik analizi.")
 
     if st.button("📊 Analizi Başlat", use_container_width=True):
@@ -314,6 +388,15 @@ with tab2:
         st.markdown("---")
         st.markdown(st.session_state.perf_res)
 
+        st.markdown("---")
+        if st.button("⚠️ Risk Faktörleri Analizi (Gelişmiş)"):
+            with st.spinner("Risk senaryoları analiz ediliyor..."):
+                history_df = load_history_cached(employee_name, target_type)
+                history_text = history_df.to_markdown(index=False) if not history_df.empty else "Sayısal veri yok."
+                risk_res = analyzer.analyze_risk_factors(employee_name, target_type, history_text)
+                st.markdown("### ⚠️ Risk Analiz Sonuçları")
+                st.markdown(risk_res)
+
     with st.expander("💾 Ham Performans Verileri", expanded=False):
         if employee_name:
             history_df = load_history_cached(employee_name, target_type)
@@ -321,55 +404,3 @@ with tab2:
                 st.dataframe(history_df, use_container_width=True)
             else:
                 st.info("Bu çalışan ve kategori için geçmiş veri bulunamadı.")
-
-# ====================== TAB 3: CHAT ASISTAN ======================
-with tab3:
-    st.markdown(f"""
-    <div style="
-        background: linear-gradient(135deg, #f0f9ff, #e0f2fe);
-        border: 1px solid #bae6fd;
-        border-radius: 12px;
-        padding: 0.9rem 1.2rem;
-        margin-bottom: 1rem;
-    ">
-        <p style="margin:0; font-size:0.88rem; color:#0369a1;">
-            🔒 <b>Kısıtlı Oturum:</b> Bu asistan yalnızca
-            <b>{employee_name}</b> çalışanına ait <b>{target_type}</b>
-            verilerine erişebilir. Diğer çalışan ve kategoriler hakkında bilgi paylaşmaz.
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Geçmiş mesajları göster (silinmez, kalıcı)
-    chat_placeholder = st.container()
-    with chat_placeholder:
-        for user_msg, bot_msg in st.session_state.chat_history:
-            display_chat_message("user", user_msg)
-            display_chat_message("bot", bot_msg)
-
-    # Yeni mesaj girişi
-    if prompt := st.chat_input(f"{employee_name} hakkında soru sorun..."):
-        # Kullanıcı mesajını hemen göster
-        display_chat_message("user", prompt)
-
-        with st.spinner("Yanıt üretiliyor..."):
-            response = analyzer.chat_with_data(
-                message=prompt,
-                history=st.session_state.chat_history,
-                employee_name=employee_name,
-                target_type=target_type,
-                metadata_context=metadata_context_str,
-                current_goal_set=st.session_state.current_goal_set
-            )
-
-        # Bot yanıtını göster
-        display_chat_message("bot", response)
-
-        # Geçmişe ekle (tuple olarak)
-        st.session_state.chat_history.append((prompt, response))
-        st.rerun()
-
-    if st.session_state.chat_history:
-        if st.button("🗑️ Sohbeti Temizle", use_container_width=False):
-            st.session_state.chat_history = []
-            st.rerun()

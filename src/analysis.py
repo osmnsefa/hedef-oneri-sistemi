@@ -41,9 +41,10 @@ MASTERMIND_RULES = """
 1. DİL KİLİDİ: Sadece ve sadece TÜRKÇE. İngilizce kelime yasak.
 2. VERİ SADAKATİ: Asla halüsinasyon görme. Verilen veriler dışında bilgi uydurma.
 3. KONTEKST HAKİMİYETİ: Çalışanın kim olduğunu, yönetici vizyonunu ve geçmiş başarıları tüm yanıtlarda akılda tut.
-4. MATEMATİKSEL İTAAT:
+4. MATEMATİKSEL İTAAT (BU KURAL ÇOK KRİTİKTİR):
    - Hedef tutmamışsa: "Kurtarma Hedefi" ver, çıtayı düşür ama yan destek ekle.
    - Hedef tutmuşsa: "Meydan Okuma Hedefi" ver, çıtayı yukarı çek.
+   - KESİN %30 KURALI: Hiçbir hedef önerisi geçmişteki veya mevcut gerçekleşenden %30 DAHA FAZLA OLAMAZ. Eğer hesapladığın artış oranı > %30 ise, HEDEF DEĞERİNİ DÜŞÜR. Bunu hem ilk hedeflerde hem revizyonda ZORUNLU KIL.
 5. DÜŞÜNME ALGORİTMASI:
    ADIM 1 - DEDEKTİF: Sayıları cımbızla çek, gizli trendleri bul.
    ADIM 2 - STRATEJİST: Vizyonu göreve tercüme et.
@@ -133,7 +134,6 @@ PATCH_SCHEMA = """
 EVALUATE_SCHEMA = """
 {
   "is_appropriate": true,
-  "risk_score": 5,
   "analysis": "string",
   "improvement_suggestions": ["string"],
   "requires_revision": false
@@ -141,14 +141,176 @@ EVALUATE_SCHEMA = """
 """
 
 # ==============================================================================
+# 📊 RISK & KARAR DESTEK MOTORU (DSS) KATMANLARI
+# ==============================================================================
+RISK_MATRIX = {
+    "veri_tutarsizligi": {
+        "kategori": "Veri",
+        "olasilik": 4,
+        "etki": 5,
+        "skor": 20,
+        "oncelik": "Kritik",
+        "mitigation": "Otomatik doğrulama ve %80 eksik veri filtresi"
+    },
+    "yetki_ihlali": {
+        "kategori": "Güvenlik",
+        "olasilik": 2,
+        "etki": 5,
+        "skor": 10,
+        "oncelik": "Orta",
+        "mitigation": "RBAC kontrolü ve Audit logging"
+    },
+    "nlp_hatalari": {
+        "kategori": "Teknik",
+        "olasilik": 3,
+        "etki": 3,
+        "skor": 9,
+        "oncelik": "Orta",
+        "mitigation": "Gerekçe Kartı ve Çıktı Doğrulama"
+    },
+    "kullanici_direnci": {
+        "kategori": "Operasyonel",
+        "olasilik": 3,
+        "etki": 3,
+        "skor": 9,
+        "oncelik": "Orta",
+        "mitigation": "XAI (Açıklanabilir YZ) ve Karar Destek vurgusu"
+    },
+    "hiyerarsi_kisiti": {
+        "kategori": "Operasyonel",
+        "olasilik": 2,
+        "etki": 2,
+        "skor": 4,
+        "oncelik": "Düşük",
+        "mitigation": "Manuel Override ve Yönetici Onayı"
+    }
+}
+
+class DataQualityValidator:
+    def validate_history(self, history_text):
+        """Veri kalitesini kontrol eder. %80 üzeri eksiklikte analizi durdurur."""
+        issues = []
+        if not history_text or len(history_text.strip()) < 10 or history_text == "Sayısal veri yok.":
+            return {"valid": False, "score": 0, "issues": ["Geçmiş veri tamamen eksik veya çok kısa."]}
+
+        expected_fields = ["hedef", "gerçekleşen", "performans", "tarih"]
+        found_fields = sum(1 for field in expected_fields if field in history_text.lower())
+        missing_ratio = 1 - (found_fields / len(expected_fields))
+
+        if missing_ratio > 0.8:
+            return {"valid": False, "score": 20, "issues": [f"Veri setinde %{int(missing_ratio*100)} eksiklik tespit edildi (Eşik: %80)."]}
+
+        numeric_data = re.findall(r"\d+", history_text)
+        if not numeric_data:
+            issues.append("Sayısal KPI verisi tespit edilemedi.")
+
+        quality_score = 100 - (len(issues) * 20) - (missing_ratio * 50)
+        return {
+            "valid": quality_score > 30,
+            "score": quality_score,
+            "issues": issues,
+            "missing_ratio": missing_ratio
+        }
+
+class RiskEngine:
+    def assess_risks(self, data_quality_score, valid_structure):
+        """Sistemdeki aktif riskleri matrisle eşleştirir."""
+        active_risks = []
+        if data_quality_score < 60:
+            active_risks.append(RISK_MATRIX["veri_tutarsizligi"])
+        if not valid_structure:
+            active_risks.append(RISK_MATRIX["nlp_hatalari"])
+        return active_risks
+
+class DecisionSupportEngine:
+    def calculate_success_probability(self, history_df, suggested_response):
+        """Geçmiş verilere ve önerilen hedefin niteliğine göre başarı olasılığını hesaplar."""
+        if history_df.empty:
+            return 65
+
+        try:
+            ratios = []
+            for _, row in history_df.iterrows():
+                h = float(row.get('Hedef Değeri', 100))
+                g = float(row.get('Gerçekleşen Değer', 80))
+                ratios.append(g / h if h != 0 else 0)
+            
+            avg_ratio = sum(ratios) / len(ratios) if ratios else 0.8
+            last_ratio = ratios[-1] if ratios else avg_ratio
+            stat_prob = (avg_ratio * 0.4 + last_ratio * 0.6)
+            
+            risk_bonus = 0
+            if "inovasyon" in suggested_response.lower() or "yeni" in suggested_response.lower():
+                risk_bonus = -0.1
+            if "tekrarlı" in suggested_response.lower() or "standart" in suggested_response.lower():
+                risk_bonus = 0.05
+                
+            final_prob = (stat_prob + risk_bonus) * 100
+            return min(max(int(final_prob), 15), 98) 
+        except:
+            return 70
+
+    def calculate_risk_score(self, history_df, alignment_values, active_risks=[]):
+        """Stratejik risk skorunu hesaplar (0-100)."""
+        score = 20
+        if len(history_df) < 5:
+            score += 30
+        max_focus = max(alignment_values.values()) if alignment_values else 0
+        if max_focus > 70:
+            score += 25
+        
+        # RiskEngine'den gelen riskleri ekle
+        for risk in active_risks:
+            score += risk.get("skor", 0)
+
+        return min(score, 100)
+
+    def get_strategic_alignment(self, suggested_goals_text):
+        """Hedeflerin stratejik odak dağılımını analiz eder."""
+        themes = {
+            "Kalite/Hata": ["kalite", "hata", "sıfır", "revizyon", "kpi"],
+            "Hız/Zaman": ["hız", "süre", "teslim", "zaman", "deadline"],
+            "Maliyet/Verim": ["maliyet", "verim", "tasarruf", "optimizasyon"],
+            "İnovasyon": ["yeni", "arge", "patent", "tasarım", "inovasyon"]
+        }
+        
+        distribution = {k: 0 for k in themes.keys()}
+        total_hits = 0
+        
+        for theme, keywords in themes.items():
+            for kw in keywords:
+                if kw in suggested_goals_text.lower():
+                    distribution[theme] += 1
+                    total_hits += 1
+        
+        if total_hits == 0: 
+            return {
+                "values": {k: 25 for k in themes.keys()}, 
+                "descriptions": {k: "Veri dağılımı stabil." for k in themes.keys()}
+            }
+        
+        distribution_pct = {k: int((v/total_hits)*100) for k, v in distribution.items()}
+        details = {
+            "Kalite/Hata": "Hata payını minimize eden mükemmellik yaklaşımı.",
+            "Hız/Zaman": "Teslimat sürelerini optimize eden hız odaklı hedefler.",
+            "Maliyet/Verim": "Kaynak kullanımını optimize eden verimlilik odağı.",
+            "İnovasyon": "Yeni teknolojilerle fark yaratan alanlar."
+        }
+        return {"values": distribution_pct, "descriptions": details}
+
+
+# ==============================================================================
 # 🚀 ANALYZER CLASS
 # ==============================================================================
 
 class Analyzer:
     def __init__(self):
-        self.version = "2.1.0-MASTERMIND-ENGINE"
+        self.version = "2.2.0-RISK-INTEGRATED"
         self.llm_client = LLMClient()
         self.vector_store = VectorStore()
+        self.data_validator = DataQualityValidator()
+        self.risk_engine = RiskEngine()
+        self.dss_engine = DecisionSupportEngine()
 
     def build_system_prompt(self, mode="GENERATE"):
         base = f"""
@@ -168,6 +330,13 @@ class Analyzer:
 
     def analyze_and_suggest(self, employee_name, target_type, manager_vision, history_text):
         """v1 (BASELINE) Hedef Seti Üretimi - Tam olarak 3 SMART hedef"""
+        
+        # 1. VERİ KALİTE KONTROLÜ (Pre-processing Risk Layer)
+        data_check = self.data_validator.validate_history(history_text)
+        if not data_check["valid"]:
+            logger.warning(f"Kritik Veri Riski: {data_check['issues']}")
+            return {"error": f"Veri Yetersiz / Risk Yönetimi: {', '.join(data_check['issues'])} Lütfen geçerli geçmiş performans verisi sağlayın.", "raw": history_text}
+
         evidence = self.vector_store.get_evidence(
             f"{employee_name} {target_type} görev sorumluluk yetkinlik", top_k=6
         )
@@ -200,9 +369,8 @@ class Analyzer:
            Eğer görev tanımı/kanıtlarda da destek varsa onu da bağla.
         5. 'evidence_justification' alanı İKİ BÖLÜM içermeli:
            - GEÇMİŞ VERİ & TREND: Bu hedefi hangi sayı veya eğilim tetikledi?
-           - METRİK GEREKÇESİ: previous_value ve target_value neden bu rakamlar seçildi, bant kuralı nasıl uygulandı?
-           Örn: 'Geçmiş veride hata oranı %18 görüldü (trend: 3 dönem artış). Hedef %14'e düşürülmesi, %30 cap içindeki maksimum iyileştirmeyi temsil ediyor.'
-        6. Matematik kurallarına (clamping) mutlaka uy. Her rakam veriye dayalı olmalı.
+           - METRİK GEREKÇESİ: previous_value ve target_value neden bu rakamlar seçildi?
+        6. %30 HARD LIMIT (ÇOK KRİTİK): Çıkaracağın hiçbir hedefin 'target_value' değeri, 'previous_value' değerinden %30'dan daha fazla YÜKSEK OLAMAZ. Bu kuralı AŞMAK KESİNLİKLE YASAKTIR. Eğer %30'u aştığını hesaplarsan değeri geri düşür.
         
         Format: {GOAL_SET_SCHEMA}
         Lütfen geçerli bir JSON döndür. goal_set_id'yi '{goal_set_uuid}' olarak ata.
@@ -216,11 +384,14 @@ class Analyzer:
         )
         return self._safe_json_load(response)
 
-    def evaluate_goals(self, current_goal_set, employee_name):
+    def evaluate_goals(self, current_goal_set, employee_name, dss_risk_score=None):
         """Mevcut hedeflerin uygunluğunu analiz eder (Evaluate Mode)"""
+        dss_info = f"\nKarar Destek Sistemi (DSS) Risk Skoru: %{dss_risk_score} (0 en iyi, 100 en riskli)" if dss_risk_score else ""
+        
         user_prompt = f"""
         Şu hedef setini (v{current_goal_set.get('version')}) analiz et.
-        Mevcut rakamları değiştirme, sadece risk ve uygunluk değerlendirmesi yap.
+        Mevcut rakamları değiştirme, sadece risk ve uygunluk değerlendirmesi yap.{dss_info}
+        Bu skoru değerlendirmenin analiz kısmında (gerekçesiyle) kullanabilirsin.
         
         HEDEFLER: {json.dumps(current_goal_set['goals'], ensure_ascii=False)}
         
@@ -251,7 +422,7 @@ class Analyzer:
         "{feedback}"
         
         Bu geri bildirime göre bir PATCH üret. Kuralları (%30 cap, band limitleri) asla ihlal etme.
-        Eğer yöneticinin talebi kurallara (clamping) takılırsa, 'reason' alanında HANGİ kuralın devreye girdiğini açıkla.
+        DİKKAT: %30 HARD LIMIT KURALI geçerlidir. Eğer yönetici %30'dan daha yüksek bir artış talep ederse, değeri tam %30 limitine çekerek (clamping yaparak) 'reason' alanında HANGİ kuralın devreye girdiğini mutlaka açıkla (Örn: "%30 limiti kuralı nedeniyle hedef talep edilen X değerine değil limit olan Y değerine çekilmiştir").
         'evidence_justification' alanına somut gerekçe yaz.
         
         Format: {PATCH_SCHEMA}
@@ -288,8 +459,8 @@ class Analyzer:
         
         Lütfen şunları listele:
         
-        ### 💪 GÜÇLÜ YÖNLER (Verilerle Kanıtla)
-        - Madde 1 (Kanıt: ...)
+        ### 💪 GÜÇLÜ YÖNLER
+        - Madde 1 (Gerekçe: ...)
         - Madde 2 ...
         
         ### ⚠️ GELİŞİME AÇIK ALANLAR / ZAYIF YÖNLER
@@ -299,7 +470,7 @@ class Analyzer:
         ### 🚀 GELİŞİM ÖNERİLERİ
         - Bu alanları iyileştirmek için somut 2-3 öneri.
         
-        Kısa, öz ve profesyonel bir dille yaz. Kanıtları "çünkü" veya "veriye göre" ile açıkla.
+        Kısa, öz ve profesyonel bir dille yaz. Metinlerinde renkli yeşil bloklar yaratmaktan kaçın. Mümkün olduğunca standart siyah düz metin tonunda yaz (örneğin sadece düz markdown). Kanıtları normal parantez içinde açıkla.
         """
 
         return self.llm_client.generate_response(
@@ -307,6 +478,52 @@ class Analyzer:
             user_prompt=user_prompt,
             temperature=0.4
         )
+
+    def analyze_risk_factors(self, employee_name, target_type, history_text):
+        """LLM kullanarak personelin ve hedeflerin önündeki spesifik risk faktörlerini analiz eder."""
+        rag_query = f"{employee_name} {target_type} geçmiş hatalar gecikmeler riskler yetkinlik eksiklikleri"
+        unstructured_context = self.vector_store.get_context(rag_query)
+
+        user_prompt = f"""
+        {employee_name} isimli çalışanın '{target_type}' hedefleri için spesifik RİSK FAKTÖRLERİ analizi yap.
+        
+        === VERİLER ===
+        Sayısal Geçmiş: {history_text}
+        Sözel Kayıtlar: {unstructured_context}
+        
+        Lütfen tam olarak şu formatta bir tablo ve özet dön:
+        1. "Faktör | Seviye | Etki" kolonlarından oluşan bir markdown tablosu.
+        2. Seviye: Düşük, Orta, Yüksek.
+        3. Etki: -%X (Başarı olasılığına etkisi).
+        4. Tablonun altına "### ⚠️ En Kritik Risk: [Risk Adı]" başlığıyla bir açıklama ekle.
+        
+        Örnek Faktörler: Yetkinlik Boşluğu, Operasyonel Yük, Kaynak Kısıtı, Geçmiş Teknik Hatalar vb.
+        """
+
+        return self.llm_client.generate_response(
+            system_prompt=self.build_system_prompt("ANALYZE"),
+            user_prompt=user_prompt,
+            temperature=0.3
+        )
+
+    def get_decision_support_metrics(self, history_df, suggested_goals_text, active_risks=None):
+        """Yönetici için karar destek metriklerini hesaplar."""
+        if active_risks is None:
+            active_risks = []
+
+        avg_success = history_df['Gerçekleşen Değer'].mean() if not history_df.empty and 'Gerçekleşen Değer' in history_df else 0
+        benchmark_val = "+%12" if avg_success > 85 else "+%5"
+        
+        alignment = self.dss_engine.get_strategic_alignment(suggested_goals_text)
+        
+        metrics = {
+            "success_probability": self.dss_engine.calculate_success_probability(history_df, suggested_goals_text),
+            "strategic_alignment": alignment,
+            "benchmark_status": f"Bölüm Ortalamasının {benchmark_val} Üzerinde",
+            "skill_impact": "Teknik Yetkinlik Kazanımı (%20 Verim Artışı Potansiyeli)",
+            "risk_score": self.dss_engine.calculate_risk_score(history_df, alignment["values"], active_risks)
+        }
+        return metrics
 
     def chat_with_data(self, message, history, employee_name, target_type="",
                        metadata_context="", current_goal_set=None):

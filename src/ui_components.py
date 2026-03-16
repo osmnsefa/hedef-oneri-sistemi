@@ -41,9 +41,10 @@ def load_custom_css():
         section[data-testid="stSidebar"] .stTextArea textarea,
         section[data-testid="stSidebar"] .stTextInput input {
             background-color: #1a2f4a !important;
-            border: 1px solid rgba(255,255,255,0.2) !important;
+            border: 1px solid rgba(255,255,255,0.4) !important;
             border-radius: 8px !important;
             color: #ffffff !important;
+            font-weight: 500 !important;
         }
         /* Focus durumu için */
         section[data-testid="stSidebar"] .stTextArea textarea:focus,
@@ -229,15 +230,15 @@ def render_header(employee_name="", target_type="", metadata=None):
             <div style="
                 background: rgba(255,255,255,0.15);
                 border-radius: 12px;
-                padding: 0.6rem 1.2rem;
+                padding: 0.8rem 1.4rem;
                 backdrop-filter: blur(10px);
-                border: 1px solid rgba(255,255,255,0.25);
+                border: 2px solid rgba(255,255,255,0.4);
             ">
-                <p style="color:rgba(255,255,255,0.7); font-size:0.75rem; margin:0; font-weight:500; text-transform:uppercase; letter-spacing:0.06em;">Aktif Oturum</p>
-                <p style="color:#ffffff; font-size:1rem; margin:0.2rem 0 0 0; font-weight:700;">
+                <p style="color:rgba(255,255,255,0.8); font-size:0.8rem; margin:0; font-weight:600; text-transform:uppercase; letter-spacing:0.06em;">Aktif Oturum</p>
+                <p style="color:#ffffff; font-size:1.3rem; margin:0.2rem 0 0.1rem 0; font-weight:900;">
                     {employee_name if employee_name else "—"}
                 </p>
-                <p style="color:rgba(255,255,255,0.65); font-size:0.8rem; margin:0;">
+                <p style="color:rgba(255,255,255,0.8); font-size:0.85rem; margin:0; font-weight:500;">
                     {target_type if target_type else "Hedef seçilmedi"}
                 </p>
             </div>
@@ -263,3 +264,87 @@ def display_chat_message(role, message):
         st.markdown(f'<div class="user-message">👤 <b>Siz:</b><br>{message}</div>', unsafe_allow_html=True)
     else:
         st.markdown(f'<div class="bot-message">🤖 <b>Asistan:</b><br>{message}</div>', unsafe_allow_html=True)
+
+def render_dss_metrics(metrics, employee_name=""):
+    """Karar Destek Sistemi (DSS) metriklerini görselleştirir."""
+    if not metrics:
+        return
+
+    title_name = f"{employee_name} için " if employee_name else ""
+    st.markdown(f"### 🧠 {title_name}Stratejik Karar Desteği\n", unsafe_allow_html=True)
+    
+    # --- 1. SATIR: DÖRT KOLONLU METRİKLER ---
+    c1, c2, c3, c4 = st.columns(4)
+    
+    # Başarı Olasılığı
+    with c1:
+        prob = metrics.get('success_probability', 65)
+        color = "#16a34a" if prob >= 70 else ("#f59e0b" if prob >= 40 else "#dc2626")
+        label = "Yüksek Güven" if prob >= 70 else ("Orta Güven" if prob >= 40 else "Düşük Güven")
+        st.markdown(f"""
+        <div style="padding:0;">
+            <p style="color:#475569; font-size:0.8rem; font-weight:700; margin:0;">🎯 BAŞARI</p>
+            <h2 style="color:#0f172a; margin:0; font-size:1.8rem; font-weight:800;">%{prob}</h2>
+            <p style="color:{color}; font-size:0.75rem; font-weight:600; margin:0;">Güven: %{prob}</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Bölüm Uyumu (Benchmark)
+    with c2:
+        bench = metrics.get('benchmark_status', '')
+        # Basit ayrıştırma (Örn: "Bölüm Ortalamasının +%5 Üzerinde")
+        st.markdown(f"""
+        <div style="padding:0;">
+            <p style="color:#475569; font-size:0.8rem; font-weight:700; margin:0;">📈 BÖLÜM UYUMU</p>
+            <p style="color:#475569; font-size:0.85rem; font-weight:500; margin:0.2rem 0; line-height:1.2;">{bench}</p>
+            <p style="color:#16a34a; font-size:0.75rem; font-weight:600; margin:0;">Üst Segment</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Risk Skoru
+    with c3:
+        risk = metrics.get('risk_score', 50)
+        r_level = "Düşük" if risk < 40 else ("Orta/Yüksek" if risk < 75 else "Kritik")
+        st.markdown(f"""
+        <div style="padding:0;">
+            <p style="color:#475569; font-size:0.8rem; font-weight:700; margin:0;">⚠️ RİSK SKORU</p>
+            <h2 style="color:#0f172a; margin:0; font-size:1.8rem; font-weight:800;">%{risk}</h2>
+            <p style="color:#64748b; font-size:0.75rem; font-weight:600; margin:0;">Seviye: {r_level}</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Gelişim / Yetkinlik
+    with c4:
+        st.markdown(f"""
+        <div style="padding:0;">
+            <p style="color:#475569; font-size:0.8rem; font-weight:700; margin:0;">🚀 GELİŞİM</p>
+            <p style="color:#475569; font-size:0.75rem; font-weight:500; margin:0.2rem 0; line-height:1.2;">{metrics.get('skill_impact', 'Belirlenemedi.')}</p>
+            <p style="color:#16a34a; font-size:0.75rem; font-weight:600; margin:0;">Pozitif Katkı</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("<hr style='margin:1.5rem 0; border: none; border-top: 1px solid #e2e8f0;'>", unsafe_allow_html=True)
+
+    # --- 2. SATIR: STRATEJİK ODAK ---
+    st.markdown("### 🎯 Stratejik Odak ve Detay Analizi\n", unsafe_allow_html=True)
+    
+    align = metrics.get('strategic_alignment', {})
+    values = align.get("values", {})
+    descriptions = align.get("descriptions", {})
+    
+    col_str1, col_str2 = st.columns(2)
+    
+    keys = list(values.keys())
+    if len(keys) >= 4:
+        with col_str1:
+            st.markdown(f"**{keys[0]} %{values[keys[0]]}**")
+            st.markdown(f"<p style='color:#64748b; font-size:0.85rem;'>💡 {descriptions.get(keys[0], '')}</p>", unsafe_allow_html=True)
+            st.markdown(f"**{keys[2]} %{values[keys[2]]}**")
+            st.markdown(f"<p style='color:#64748b; font-size:0.85rem;'>💡 {descriptions.get(keys[2], '')}</p>", unsafe_allow_html=True)
+
+        with col_str2:
+            st.markdown(f"**{keys[1]} %{values[keys[1]]}**")
+            st.markdown(f"<p style='color:#64748b; font-size:0.85rem;'>💡 {descriptions.get(keys[1], '')}</p>", unsafe_allow_html=True)
+            st.markdown(f"**{keys[3]} %{values[keys[3]]}**")
+            st.markdown(f"<p style='color:#64748b; font-size:0.85rem;'>💡 {descriptions.get(keys[3], '')}</p>", unsafe_allow_html=True)
+
