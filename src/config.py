@@ -17,6 +17,15 @@ class Config:
     # Türkçe için daha iyi olabilecek multilingual modeller tercih edilebilir ama varsayılan olarak bunu tutuyoruz
     EMBEDDING_MODEL = 'sentence-transformers/all-MiniLM-L6-v2'
     
+    # Veritabanı Ayarları
+    # Eski Yerel SQLite Bağlantısı
+    DATABASE_URL = os.environ.get('DATABASE_URL', f"sqlite:///{os.path.join(BASE_DIR, 'pms_sql.db')}")
+    
+    # Yeni Bulut PostgreSQL Bağlantısı (Supabase)
+    # DATABASE_URL = os.environ.get('DATABASE_URL')
+    if not DATABASE_URL:
+        raise ValueError("Kritik Hata: DATABASE_URL bulunamadı! Lütfen .env dosyanıza Supabase bağlantı linkini ekleyin.")
+    
     # UI Ayarları
     PAGE_TITLE = "Stratejik PMS - Yönetim Paneli"
     PAGE_ICON = "🚀"

@@ -1,211 +1,106 @@
 import pandas as pd
-from docx import Document
-import os
 import logging
-from src.config import Config
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from sqlalchemy.orm import Session
+from src.auth import get_db_session
+from src.models import Employee, PerformanceHistory
+
 logger = logging.getLogger(__name__)
 
 class DataLoader:
     def __init__(self):
-        self.data_dir = Config.DATA_DIR
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
-            separators=["\n\n", "\n", ".", " ", ""]
-        )
+        pass
         
-    def load_excel_data(self):
-        """Excel dosyalarından her satırı ayrı bir döküman olarak çıkarır."""
-        documents = []
-        if not os.path.exists(self.data_dir):
-            logger.warning(f"Veri klasörü bulunamadı: {self.data_dir}")
-            return documents
-
-        for filename in os.listdir(self.data_dir):
-            if filename.endswith(('.xlsx', '.xls')) and not filename.startswith('~$'):
-                file_path = os.path.join(self.data_dir, filename)
-                try:
-                    df = pd.read_excel(file_path).fillna("")
-                    columns = df.columns.tolist()
-                    
-                    # Kolon isimlerini temizle (boşluk vs)
-                    df.columns = [str(c).strip() for c in df.columns]
-                    columns = df.columns.tolist()
-
-                    for index, row in df.iterrows():
-                        row_text = []
-                        metadata_name = ""
-                        
-                        # İsim tespiti için daha esnek kontrol
-                        name_col = next((c for c in columns if c.lower() in ['isim', 'ad soyad', 'çalışan']), None)
-                        if name_col:
-                            metadata_name = str(row[name_col]).strip()
-
-                        for col in columns:
-                            val = str(row[col]).strip()
-                            if val and val.lower() != "nan":
-                                row_text.append(f"{col}: {val}")
-                        
-                        if row_text:
-                            content = " | ".join(row_text)
-                            documents.append({
-                                "source": filename, 
-                                "content": content,
-                                "employee": metadata_name,
-                                "is_excel": True # Excel olduğunu işaretle
-                            })
-                    
-                    logger.info(f"✅ Excel yüklendi: {filename} ({len(df)} satır)")
-                except Exception as e:
-                    logger.error(f"❌ Excel okuma hatası ({filename}): {str(e)}")
-        return documents
-
-    def load_word_data(self):
-        """Word dosyalarından ham metin verisi çıkarır."""
-        documents = []
-        if not os.path.exists(self.data_dir):
-            return documents
-
-        for filename in os.listdir(self.data_dir):
-            if filename.endswith('.docx'):
-                file_path = os.path.join(self.data_dir, filename)
-                try:
-                    doc = Document(file_path)
-                    text = f"--- DOSYA: {filename} ---\n"
-                    text += "\n".join([para.text for para in doc.paragraphs if para.text.strip()])
-                    
-                    # Tabloları da oku
-                    for table in doc.tables:
-                        for row in table.rows:
-                            row_text = [cell.text.strip() for cell in row.cells if cell.text.strip()]
-                            if row_text:
-                                text += " | ".join(row_text) + "\n"
-                    
-                    documents.append({"source": filename, "content": text})
-                    logger.info(f"✅ Word yüklendi: {filename}")
-                except Exception as e:
-                    logger.error(f"❌ Word okuma hatası ({filename}): {str(e)}")
-        return documents
-
-    def get_chunked_documents(self):
-        """Tüm verileri yükler ve RAG için hazırlar."""
-        excel_docs = self.load_excel_data()
-        word_docs = self.load_word_data()
-        
-        final_docs = []
-        
-        # Excel verilerini doğrudan (split etmeden) ekle
-        for doc in excel_docs:
-            final_docs.append({
-                "page_content": doc['content'],
-                "metadata": {
-                    "source": doc['source'],
-                    "employee": doc.get('employee', 'Bilinmeyen')
-                }
-            })
-            
-        # Word verilerini split ederek ekle
-        for doc in word_docs:
-            chunks = self.text_splitter.split_text(doc['content'])
-            for chunk in chunks:
-                final_docs.append({
-                    "page_content": chunk,
-                    "metadata": {"source": doc['source']}
-                })
-                
-        logger.info(f"Toplam {len(final_docs)} döküman hazırlandı.")
-        return final_docs
-
     def get_dropdown_options(self):
-        """Excel'den benzersiz Çalışan isimlerini ve Hedef Türlerini çeker."""
-        employees = set()
-        target_types = set()
-        
-        if not os.path.exists(self.data_dir):
+        """SQL'den benzersiz Çalışan isimlerini ve Hedef Türlerini çeker."""
+        session = get_db_session()
+        try:
+            # Çalışan adlarını PerformanceHistory üzerinden çekiyoruz ki null değerler olmasın
+            employees = session.query(PerformanceHistory.isim).distinct().all()
+            target_types = session.query(PerformanceHistory.hedef_turu).distinct().all()
+            
+            employees_list = sorted([e[0] for e in employees if e[0]])
+            target_list = sorted([t[0] for t in target_types if t[0]])
+            return employees_list, target_list
+        except Exception as e:
+            logger.error(f"Seçenekleri SQL'den çekerken hata: {e}")
             return [], []
-
-        for filename in os.listdir(self.data_dir):
-            if filename.endswith(('.xlsx', '.xls')) and not filename.startswith('~$'):
-                file_path = os.path.join(self.data_dir, filename)
-                try:
-                    df = pd.read_excel(file_path).fillna("")
-                    
-                    # Kolon adı düzeltmesi: 'İsim' veya 'Ad Soyad' olabilir
-                    name_col = 'İsim' if 'İsim' in df.columns else 'Ad Soyad'
-                    
-                    if name_col in df.columns:
-                        employees.update(df[name_col].dropna().astype(str).unique())
-                    
-                    if 'Hedef Türü' in df.columns:
-                        target_types.update(df['Hedef Türü'].dropna().astype(str).unique())
-                        
-                except Exception as e:
-                    logger.error(f"Metadata okuma hatası ({filename}): {str(e)}")
-        
-        return sorted(list(employees)), sorted(list(target_types))
+        finally:
+            session.close()
 
     def get_employee_history(self, employee_name, target_type=None):
-        """Seçilen çalışan ve hedef türü için geçmiş verileri tablo olarak döner."""
-        history_df = pd.DataFrame()
-        
-        if not os.path.exists(self.data_dir):
-            return history_df
-
-        for filename in os.listdir(self.data_dir):
-            if filename.endswith(('.xlsx', '.xls')) and not filename.startswith('~$'):
-                file_path = os.path.join(self.data_dir, filename)
-                try:
-                    df = pd.read_excel(file_path).fillna("")
-                    name_col = 'İsim' if 'İsim' in df.columns else 'Ad Soyad'
-                    
-                    if name_col in df.columns:
-                        # Çalışana göre filtrele
-                        filtered = df[df[name_col] == employee_name]
-                        
-                        # Hedef türüne göre filtrele (opsiyonel)
-                        if target_type and 'Hedef Türü' in df.columns:
-                            filtered = filtered[filtered['Hedef Türü'] == target_type]
-                            
-                        if not filtered.empty:
-                            history_df = pd.concat([history_df, filtered])
-                            
-                except Exception as e:
-                    logger.error(f"Geçmiş verisi okuma hatası ({filename}): {str(e)}")
-                    
-        return history_df
+        """Seçilen çalışan ve hedef türü için SQL üzerinden geçmiş verileri tablo (DataFrame) olarak döner."""
+        session = get_db_session()
+        try:
+            query = session.query(
+                PerformanceHistory.sicil_no.label('Sicil'),
+                PerformanceHistory.isim.label('İsim'),
+                PerformanceHistory.bolum.label('Bölüm Ana Sorumluluk Alanı'),
+                PerformanceHistory.unvan.label('Unvan'),
+                PerformanceHistory.yil.label('Yıl'),
+                PerformanceHistory.hedef_turu.label('Hedef Türü'),
+                PerformanceHistory.yetkinlik.label('Yetkinlik'),
+                PerformanceHistory.stratejik_hedef.label('Stratejik Hedef Tanımı'),
+                PerformanceHistory.smart_hedef.label('SMART Hedef Tanımı'),
+                PerformanceHistory.hedef_degeri.label('Hedef Değeri'),
+                PerformanceHistory.birim.label('Birim'),
+                PerformanceHistory.hedef_yonu.label('Hedef Yönü'),
+                PerformanceHistory.gerceklesen_deger.label('Gerçekleşen Değer'),
+                PerformanceHistory.sonuc.label('Gerçekleşen Değere Göre Sonuç')
+            ).filter(PerformanceHistory.isim == employee_name)
+            
+            if target_type:
+                query = query.filter(PerformanceHistory.hedef_turu == target_type)
+                
+            df = pd.read_sql(query.statement, session.bind)
+            return df
+        except Exception as e:
+            logger.error(f"Geçmiş verileri çekerken hata: {e}")
+            return pd.DataFrame()
+        finally:
+             session.close()
 
     def get_employee_metadata(self, employee_name):
         """Çalışanın kimlik bilgilerini (Unvan, Bölüm, Sicil) döner."""
-        metadata = {}
-        
-        if not os.path.exists(self.data_dir):
-            return metadata
+        session = get_db_session()
+        try:
+            emp = session.query(PerformanceHistory).filter(PerformanceHistory.isim == employee_name).first()
+            if emp:
+                return {
+                    "Sicil": emp.sicil_no,
+                    "Unvan": emp.unvan,
+                    "Bölüm Ana Sorumluluk Alanı": emp.bolum
+                }
+            return {}
+        except Exception as e:
+            logger.error(f"Metadata çekerken hata: {e}")
+            return {}
+        finally:
+            session.close()
 
-        for filename in os.listdir(self.data_dir):
-            if filename.endswith(('.xlsx', '.xls')) and not filename.startswith('~$'):
-                file_path = os.path.join(self.data_dir, filename)
-                try:
-                    df = pd.read_excel(file_path).fillna("")
-                    name_col = 'İsim' if 'İsim' in df.columns else 'Ad Soyad'
-                    
-                    if name_col in df.columns:
-                        # Çalışana göre filtrele
-                        person_row = df[df[name_col] == employee_name]
-                        
-                        if not person_row.empty:
-                            row = person_row.iloc[0]
-                            # İstenen sütunlar
-                            target_cols = ['Sicil', 'Unvan', 'Bölüm Ana Sorumluluk Alanı']
-                            for col in target_cols:
-                                if col in df.columns:
-                                    metadata[col] = row[col]
-                            
-                            # Bulduysak çıkalım (ilk eşleşme yeterli varsayımı)
-                            if metadata:
-                                return metadata
-                            
-                except Exception as e:
-                    logger.error(f"Metadata okuma hatası ({filename}): {str(e)}")
-                    
-        return metadata
+    def get_chunked_documents(self):
+        """SQL'deki tüm performans kayıtlarını RAG için flat (düz) metin dokümanlarına (chunk) çevirir."""
+        session = get_db_session()
+        docs = []
+        try:
+            records = session.query(PerformanceHistory).all()
+            for record in records:
+                content = (
+                    f"Çalışan: {record.isim} | Bölüm: {record.bolum} | Unvan: {record.unvan} | Yıl: {record.yil} | "
+                    f"Hedef Türü: {record.hedef_turu} | ŞART Hedef (SMART): {record.smart_hedef} | "
+                    f"Stratejik Hedef: {record.stratejik_hedef} | "
+                    f"Hedeflenen: {record.hedef_degeri} {record.birim} | Gerçekleşen: {record.gerceklesen_deger} | "
+                    f"Sonuç: {record.sonuc}"
+                )
+                docs.append({
+                    "page_content": content,
+                    "metadata": {
+                        "source": "SQL_PerformanceHistory",
+                        "employee": record.isim
+                    }
+                })
+            return docs
+        except Exception as e:
+            logger.error(f"SQL verileri RAG için çekilemedi: {e}")
+            return []
+        finally:
+            session.close()

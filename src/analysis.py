@@ -5,6 +5,7 @@ import json
 import logging
 import uuid
 import re
+import pandas as pd
 from src.llm_client import LLMClient
 from src.vector_store import VectorStore
 
@@ -68,7 +69,7 @@ GOAL_SET_SCHEMA = """
       "title": "string (profesyonel ve kurumsal başlık)",
       "smart_goal": "string (S-M-A-R-T cümle: içinde hedef rakamı ve zaman çerçevesi MUTLAKA geçmeli. Örn: '2027 yılı sonuna kadar X metriğini Y'den Z değerine çıkarmak')",
       "context": "string (GEÇMİŞ VERİYE VE GÖREV TANIMI'NA DAYALI gerekçe: bu hedef neden seçildi, geçmişte ne oldu, şimdi ne hedefleniyor)",
-      "evidence_justification": "string (METRİK GEREKÇE: previous_value ve target_value hangi veriden türetildi? Hangi trend bu artışı haklı kılıyor? 'Geçmiş veride X görüldüğü için target Y olarak belirlendi' formatında yaz)",
+      "evidence_justification": "string (Bu hedefin mantıksal dayanağı: 1. Geçmiş performanstaki durum ve metrikler nelerdi? 2. Çalışanın görev tanımıyla nasıl bağlantılı? 3. Geri bildirimlerdeki hangi noktayı adresliyor? Bu 3 başlığı da barındıran destekleyici tek bir mantıksal kanıt paragrafı)",
       "metrics": {
         "previous_value": 0.0,
         "target_value": 0.0,
@@ -81,7 +82,7 @@ GOAL_SET_SCHEMA = """
       "title": "string",
       "smart_goal": "string (içinde hedef rakamı ve zaman çerçevesi MUTLAKA geçmeli)",
       "context": "string (geçmiş + görev tanımı gerekçesi)",
-      "evidence_justification": "string (metrik gerekçesi — hangi veri bu rakamı belirledi)",
+      "evidence_justification": "string (Bu hedefin mantıksal dayanağı: Geçmiş performans, Görev tanımı ve Geri bildirim dayanaklarını içeren kanıt paragrafı)",
       "metrics": {
         "previous_value": 0.0,
         "target_value": 0.0,
@@ -94,7 +95,7 @@ GOAL_SET_SCHEMA = """
       "title": "string",
       "smart_goal": "string (içinde hedef rakamı ve zaman çerçevesi MUTLAKA geçmeli)",
       "context": "string (geçmiş + görev tanımı gerekçesi)",
-      "evidence_justification": "string (metrik gerekçesi — hangi veri bu rakamı belirledi)",
+      "evidence_justification": "string (Bu hedefin mantıksal dayanağı: Geçmiş performans, Görev tanımı ve Geri bildirim dayanaklarını içeren kanıt paragrafı)",
       "metrics": {
         "previous_value": 0.0,
         "target_value": 0.0,
@@ -328,7 +329,8 @@ class Analyzer:
         """
         return base
 
-    def analyze_and_suggest(self, employee_name, target_type, manager_vision, history_text):
+    def analyze_and_suggest(self, employee_name, target_type, manager_vision, history_text,
+                            sicil_no=None, employee_title=None):
         """v1 (BASELINE) Hedef Seti Üretimi - Tam olarak 3 SMART hedef"""
         
         # 1. VERİ KALİTE KONTROLÜ (Pre-processing Risk Layer)
@@ -345,6 +347,25 @@ class Analyzer:
             for e in evidence
         ])
 
+        # 2. KALİTATİF BAĞLAM: Görev Tanımı + Geri Bildirimler (Hibrit RAG)
+        job_desc_ctx = self.vector_store.get_context(
+            f"{employee_title or target_type} görev sorumluluk yetkinlik",
+            top_k=3, position_name=employee_title
+        )
+        feedback_ctx = self.vector_store.get_context(
+            f"{employee_name} teknik sosyal gelişim geri bildirim",
+            top_k=3, sicil_no=sicil_no
+        )
+        _is_empty = lambda s: not s or "BİLGİ" in s or "HATA" in s
+        kurumsal_baglaml = (
+            "\n### KURUMSAL BAĞLAM VE GERİ BİLDİRİMLER ###\n\n"
+            "[ÇALIŞANIN GÖREV TANIMI]\n"
+            + ("Görev tanımı mevcut değil." if _is_empty(job_desc_ctx) else job_desc_ctx)
+            + "\n\n[GEÇMİŞ GERİ BİLDİRİMLER]\n"
+            + ("Geri bildirim kaydı mevcut değil." if _is_empty(feedback_ctx) else feedback_ctx)
+            + "\n"
+        )
+
         goal_set_uuid = str(uuid.uuid4())[:8]
         user_prompt = f"""
         {employee_name} için '{target_type}' kategorisinde TAM OLARAK 3 ADET SMART hedef içeren v1 BASELINE hedef seti üret.
@@ -357,6 +378,7 @@ class Analyzer:
         - Geçmiş Performans Verileri (Bu sayılar metrik hesaplamalarının TEMELİ):
         {history_text if history_text else "Geçmiş veri bulunamadı. Görev tanımı ve yönetici vizyonuna dayalı hedef üret."}
         
+        {kurumsal_baglaml}
         - Destekleyici Kurumsal Kanıtlar (Görev Tanımı & Geçmiş Kayıtlar):
         {evidence_text}
 
@@ -367,10 +389,13 @@ class Analyzer:
            Örnek: '{get_target_year()} yıl sonuna kadar müşteri memnuniyet skorunu 72 puandan 88 puana çıkarmak.'
         4. 'context' alanı: geçmiş veriye DOĞRUDAN atıf yaparak başlamali. Örn: 'Geçen dönem hedef X gerçekleşen Y oldu, bu nedenle...'
            Eğer görev tanımı/kanıtlarda da destek varsa onu da bağla.
-        5. 'evidence_justification' alanı İKİ BÖLÜM içermeli:
-           - GEÇMİŞ VERİ & TREND: Bu hedefi hangi sayı veya eğilim tetikledi?
-           - METRİK GEREKÇESİ: previous_value ve target_value neden bu rakamlar seçildi?
+        5. 'evidence_justification' alanı şu ÜÇ DAYANAĞI içeren mantıksal bir açıklama paragrafı olmalıdır:
+           - GEÇMİŞ VERİ & TREND: Metrik olarak neden bu target_value seçildi?
+           - GÖREV TANIMI: Bu sayısal artış personelin ana sorumluluklarıyla ve kurumsal rolüyle nasıl bağdaşıyor?
+           - GERİ BİLDİRİM: Bu hedef, çalışanın yıllık değerlendirmelerindeki (gelişim/güçlü alan) hangi noktayı destekliyor/iyileştiriyor?
+           DİKKAT KANIT UYDURMA YASAĞI: Eğer bu üç dayanaktan birinde (örneğin Geri Bildirimlerde) ilgili hedefe dair açık/destekleyici bir veri veya metin YOKSA, KESİNLİKLE hikaye uydurma. "Geri bildirimlerde bu spesifik konuda doğrudan bir destek/kanıt bulunmamaktadır" diyerek sadece mevcut verilere dayan.
         6. %30 HARD LIMIT (ÇOK KRİTİK): Çıkaracağın hiçbir hedefin 'target_value' değeri, 'previous_value' değerinden %30'dan daha fazla YÜKSEK OLAMAZ. Bu kuralı AŞMAK KESİNLİKLE YASAKTIR. Eğer %30'u aştığını hesaplarsan değeri geri düşür.
+        7. KALİTATİF BAĞLAM: Önerilerini oluştururken sayısal verilerin yanı sıra yukarıdaki görev tanımı ve geri bildirimlerdeki teknik/sosyal yetkinlikleri de mutlaka dikkate al.
         
         Format: {GOAL_SET_SCHEMA}
         Lütfen geçerli bir JSON döndür. goal_set_id'yi '{goal_set_uuid}' olarak ata.
@@ -460,11 +485,11 @@ class Analyzer:
         Lütfen şunları listele:
         
         ### 💪 GÜÇLÜ YÖNLER
-        - Madde 1 (Gerekçe: ...)
+        - Madde 1 (Gerekçe: [İlgili ispatı şu 3 kavramla açıkla: Geçmiş Performans Sayıları, Görev Tanımı, Geri Bildirimler. DİKKAT: Herhangi birinde veri yoksa ASLA uydurma, "Bu bağlamda veri yok" diyerek dürüstçe belirt.])
         - Madde 2 ...
         
         ### ⚠️ GELİŞİME AÇIK ALANLAR / ZAYIF YÖNLER
-        - Madde 1 (Sebep: ...)
+        - Madde 1 (Sebep: [İlgili ispatı şu 3 kavramla açıkla: Geçmiş Performans Sayıları, Görev Tanımı, Geri Bildirimler. DİKKAT: Herhangi birinde veri yoksa ASLA uydurma, "Bu bağlamda veri yok" diyerek dürüstçe belirt.])
         - Madde 2 ...
         
         ### 🚀 GELİŞİM ÖNERİLERİ
@@ -511,7 +536,15 @@ class Analyzer:
         if active_risks is None:
             active_risks = []
 
-        avg_success = history_df['Gerçekleşen Değer'].mean() if not history_df.empty and 'Gerçekleşen Değer' in history_df else 0
+        avg_success = 0
+        try:
+            if not history_df.empty and 'Gerçekleşen Değer' in history_df:
+                numeric_vals = pd.to_numeric(history_df['Gerçekleşen Değer'], errors='coerce')
+                if not numeric_vals.isna().all():
+                    avg_success = numeric_vals.mean()
+        except:
+            avg_success = 0
+            
         benchmark_val = "+%12" if avg_success > 85 else "+%5"
         
         alignment = self.dss_engine.get_strategic_alignment(suggested_goals_text)
@@ -526,7 +559,8 @@ class Analyzer:
         return metrics
 
     def chat_with_data(self, message, history, employee_name, target_type="",
-                       metadata_context="", current_goal_set=None):
+                       metadata_context="", current_goal_set=None,
+                       sicil_no=None, employee_title=None):
         """
         Chatbot: SADECE seçilen çalışan ve hedef türüne ait verilere erişim izni.
         Diğer çalışanlar ve kategoriler hakkında bilgi vermez.
@@ -534,6 +568,25 @@ class Analyzer:
         """
         rag_query = f"{employee_name} {target_type} {message}"
         context = self.vector_store.get_context(rag_query)
+
+        # Kalıtatif bağlam: görev tanımı + geri bildirimler (Hibrit RAG)
+        job_desc_ctx = self.vector_store.get_context(
+            f"{employee_title or target_type} görev sorumluluk yetkinlik",
+            top_k=3, position_name=employee_title
+        )
+        feedback_ctx = self.vector_store.get_context(
+            f"{employee_name} teknik sosyal gelişim geri bildirim",
+            top_k=3, sicil_no=sicil_no
+        )
+        _is_empty = lambda s: not s or "BİLGİ" in s or "HATA" in s
+        kurumsal_baglaml = (
+            "\n=== KURUMSAL BAĞLAM VE GERİ BİLDİRİMLER ===\n\n"
+            "[ÇALIŞANIN GÖREV TANIMI]\n"
+            + ("Görev tanımı mevcut değil." if _is_empty(job_desc_ctx) else job_desc_ctx)
+            + "\n\n[GEÇMİŞ GERİ BİLDİRİMLER]\n"
+            + ("Geri bildirim kaydı mevcut değil." if _is_empty(feedback_ctx) else feedback_ctx)
+            + "\n"
+        )
 
         # Aktif hedef setini asistana detaylı aktar
         goal_context = ""
@@ -573,10 +626,20 @@ class Analyzer:
 
         {goal_context}
 
+        {kurumsal_baglaml}
+
         === İLGİLİ DÖKÜMAN VERİLERİ (RAG) ===
         {context}
 
-        Sohbet tarihçesini dikkate al. Hedefler ve gerekçeleri hakkında sorulunca yukarıdaki bilgilere dayan.
+        === KANIT SUNMA VE AÇIKLAMA DİSİPLİNİ ===
+        Hedefler tartışılırken veya kullanıcının analiz/hedef ile ilgili bir sorduğu sorulara cevap verilirken, mantığını daima şu 3 sütuna dayandır ve kullanıcıya bu şekilde aktar:
+        1. Geçmiş Performans (Sayısal gerçeklik ve trendler)
+        2. Görev Tanımı (Çalışanın kurumsal sorumlukları)
+        3. Geri Bildirimler (Çalışanın kişisel değerlendirme geçmişi, güçlü veya gelişime açık yönleri)
+        Yanıtlarda her hedefin mantığını veya sorunun cevabını bu üç bağlamla destele.
+        DİKKAT KANIT UYDURMA YASAĞI: RAG verisinde veya Geri Bildirim metninde, sorulan veya anlatılan konuyla ilgili AÇIKÇA bir destekleyici cümle YOKSA, ASLA uydurma kanıt sunma. Veri eksikse "Geri bildirimlerde veya kayıtlarda bu duruma ilişkin doğrudan bir kanıt bulunmamaktadır" diye belirt ve elindeki somut verilerle yetin.
+        
+        Sohbet tarihçesini dikkate al.
         Cevaplarını kısa, net ve profesyonel tut.
         """
 

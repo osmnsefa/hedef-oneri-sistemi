@@ -235,8 +235,9 @@ def render_header(employee_name="", target_type="", metadata=None):
                 border: 2px solid rgba(255,255,255,0.4);
             ">
                 <p style="color:rgba(255,255,255,0.8); font-size:0.8rem; margin:0; font-weight:600; text-transform:uppercase; letter-spacing:0.06em;">Aktif Oturum</p>
-                <p style="color:#ffffff; font-size:1.3rem; margin:0.2rem 0 0.1rem 0; font-weight:900;">
-                    {employee_name if employee_name else "—"}
+                <p style="color:#ffffff; font-size:1.3rem; margin:0.2rem 0 0.1rem 0; font-weight:900; display:flex; align-items:center; justify-content:flex-end; gap:8px;">
+                    <span>{employee_name if employee_name else "—"}</span>
+                    {f'<span style="background-color: #3b82f6; color: #ffffff; font-size: 0.65rem; padding: 3px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2);">{metadata.get("Bölüm Ana Sorumluluk Alanı")}</span>' if metadata and metadata.get("Bölüm Ana Sorumluluk Alanı") else ''}
                 </p>
                 <p style="color:rgba(255,255,255,0.8); font-size:0.85rem; margin:0; font-weight:500;">
                     {target_type if target_type else "Hedef seçilmedi"}
@@ -348,3 +349,63 @@ def render_dss_metrics(metrics, employee_name=""):
             st.markdown(f"**{keys[3]} %{values[keys[3]]}**")
             st.markdown(f"<p style='color:#64748b; font-size:0.85rem;'>💡 {descriptions.get(keys[3], '')}</p>", unsafe_allow_html=True)
 
+def render_locked_goals(employee_sicil):
+    """Kilitlenmiş hedefleri Streamlit üzerinde kart yapısı ile listeler ve indirme butonu sunar."""
+    from src.auth import get_db_session
+    from src.models import AnnualGoals, Employee
+    import datetime
+    import pandas as pd
+
+    st.markdown("### 🔒 Kesinleşmiş (Kilitli) Hedefler", unsafe_allow_html=True)
+    
+    session = get_db_session()
+    try:
+        locked_goals = session.query(AnnualGoals).filter(
+            AnnualGoals.employee_sicil == employee_sicil,
+            AnnualGoals.is_locked == True
+        ).all()
+        
+        emp = session.query(Employee).filter(Employee.user_sicil == employee_sicil).first()
+        employee_name = f"{emp.first_name} {emp.last_name}" if emp else employee_sicil
+        
+        if not locked_goals:
+            st.info(f"Kilitlenmiş herhangi bir hedef bulunmamaktadır.")
+            return
+
+        # Listeleme
+        report_data = []
+        for goal in locked_goals:
+            with st.expander(f"📌 {goal.yil} | {goal.hedef_turu} - {goal.smart_hedef[:40]}...", expanded=False):
+                st.markdown(f"**Hedef Türü:** {goal.hedef_turu}")
+                st.markdown(f"**SMART Hedef:** {goal.smart_hedef}")
+                justify_text = goal.evidence_justification if goal.evidence_justification else "Gerekçe belirtilmedi."
+                st.markdown(f"**Kanıt/Gerekçe:** {justify_text}")
+                
+                locked_by_str = goal.locked_by_sicil if goal.locked_by_sicil else "Belirtilmemiş"
+                st.markdown(f"**Kesinleştiren Yönetici (Sicil):** {locked_by_str}")
+                
+            report_data.append({
+                "Tarih": datetime.datetime.now().strftime("%Y-%m-%d"),
+                "İsim": employee_name,
+                "Sicil No": employee_sicil,
+                "Yıl": goal.yil,
+                "Hedef Türü": goal.hedef_turu,
+                "SMART Hedef": goal.smart_hedef,
+                "Gerekçe": justify_text,
+                "Kesinleştiren": locked_by_str
+            })
+            
+        # Rapor İndirme
+        df = pd.DataFrame(report_data)
+        csv = df.to_csv(index=False).encode('utf-8-sig')
+        
+        st.download_button(
+            label="📄 Yıllık Hedef Raporu Üret (CSV)",
+            data=csv,
+            file_name=f"{datetime.datetime.now().strftime('%Y%m%d')}_{employee_sicil}_Kesinlesmis_Hedefler.csv",
+            mime="text/csv"
+        )
+    except Exception as e:
+        st.error(f"Kilitli hedefler yüklenirken hata oluştu: {e}")
+    finally:
+        session.close()

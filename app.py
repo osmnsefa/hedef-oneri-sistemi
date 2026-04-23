@@ -4,6 +4,7 @@ from src.config import Config
 from src.ui_components import load_custom_css, render_header, display_chat_message, render_dss_metrics
 from src.analysis import Analyzer
 from src.data_loader import DataLoader
+from src.admin_panel import render_admin_dashboard
 
 # Sayfa Ayarları (En başta olmalı)
 st.set_page_config(
@@ -60,107 +61,197 @@ def init_session():
         if key not in st.session_state:
             st.session_state[key] = val
 
+from src.auth import render_login_screen
+
 init_session()
+
+# ==============================================================================
+# VERİTABANI BAŞLATMA (DB BOŞSA SEED)
+# ==============================================================================
+from src.auth import get_db_session
+from src.models import User
+import logging
+
+try:
+    _sys_sess = get_db_session()
+    
+    # Tablo var mı ve dolu mu kontrolü
+    needs_seed = False
+    try:
+        if not _sys_sess.query(User).first():
+            needs_seed = True
+    except Exception:
+        # Tablo yoksa 'no such table' hatası fırlatır, seed gerekir.
+        needs_seed = True
+        
+    if needs_seed:
+        logging.info("Veritabanı boş veya tablolar eksik, ilk kurulum (seed) yapılıyor...")
+        from seed import run_seed
+        run_seed()
+        
+    _sys_sess.close()
+except Exception as e:
+    logging.error(f"Veritabanı başlatma hatası: {e}")
+
+# ==============================================================================
+# LOGIN KONTROLÜ
+# ==============================================================================
+if 'user_id' not in st.session_state:
+    is_logged_in = render_login_screen()
+    if not is_logged_in:
+        st.stop()
 
 # Veri Yükle
 employees_list, target_types_list = load_metadata_cached()
+
+if 'allowed_employees' in st.session_state:
+    allowed_sicils = st.session_state['allowed_employees']
+    from src.auth import get_db_session
+    from src.models import Employee
+    
+    session = get_db_session()
+    allowed_emps = session.query(Employee).filter(Employee.user_sicil.in_(allowed_sicils)).all()
+    allowed_names = [f"{e.first_name} {e.last_name}".strip() for e in allowed_emps]
+    session.close()
+
+    employees_list = [emp for emp in employees_list if emp in allowed_names]
 
 # ==============================================================================
 # SIDEBAR
 # ==============================================================================
 
 with st.sidebar:
-    st.markdown("""
-    <div style="padding: 0.5rem 0 1rem 0;">
-        <h2 style="font-size:1.3rem; font-weight:800; margin:0; color:white;">🎛️ Kontrol Paneli</h2>
-        <p style="font-size:0.78rem; color:rgba(255,255,255,0.5); margin:0.2rem 0 0 0;">Parametreleri seçin</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Çalışan Seçimi
-    if employees_list:
-        employee_name = st.selectbox("Çalışan", employees_list)
+    current_role = st.session_state.get('role', '')
+    
+    if current_role == 'Admin':
+        st.markdown("""
+        <div style="padding: 0.5rem 0 1rem 0;">
+            <h2 style="font-size:1.3rem; font-weight:800; margin:0; color:white;">🛡️ Admin Paneli</h2>
+            <p style="font-size:0.78rem; color:rgba(255,255,255,0.5); margin:0.2rem 0 0 0;">Sistem yönetimi</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        if st.button("🚪 Çıkış Yap", width='stretch', type="secondary"):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
     else:
-        employee_name = st.text_input("Çalışan Adı Soyadı", placeholder="Örn: Ahmet Yılmaz")
-        st.warning("Excel'den çalışan listesi çekilemedi.")
+        st.markdown("""
+        <div style="padding: 0.5rem 0 1rem 0;">
+            <h2 style="font-size:1.3rem; font-weight:800; margin:0; color:white;">🎛️ Kontrol Paneli</h2>
+            <p style="font-size:0.78rem; color:rgba(255,255,255,0.5); margin:0.2rem 0 0 0;">Parametreleri seçin</p>
+        </div>
+        """, unsafe_allow_html=True)
 
-    # Hedef Kategorisi
-    default_targets = ["Satış & Pazarlama", "Yazılım Geliştirme", "Operasyonel Verimlilik"]
-    options = target_types_list if target_types_list else default_targets
-    target_type = st.selectbox("Hedef Kategorisi", options)
+        # Çalışan Seçimi
+        if employees_list:
+            employee_name = st.selectbox("Çalışan", employees_list)
+        else:
+            employee_name = st.text_input("Çalışan Adı Soyadı", placeholder="Örn: Ahmet Yılmaz")
+            st.warning("Çalışan listesi çekilemedi.")
 
-    # Chat kısıtlaması için aktif oturumu senkronize et
-    if (st.session_state.active_employee != employee_name or
-            st.session_state.active_target != target_type):
-        st.session_state.active_employee = employee_name
-        st.session_state.active_target = target_type
-        # Çalışan/kategori değişince chat geçmişini sıfırla
-        st.session_state.chat_history = []
-        st.session_state.current_goal_set = None
-        st.session_state.proposed_patch = None
-        st.session_state.eval_result = None
-        st.session_state.perf_res = None
+        # Hedef Kategorisi
+        default_targets = ["Satış & Pazarlama", "Yazılım Geliştirme", "Operasyonel Verimlilik"]
+        options = target_types_list if target_types_list else default_targets
+        target_type = st.selectbox("Hedef Kategorisi", options)
 
-    manager_vision = st.text_area(
-        "Yönetici Vizyonu",
-        placeholder="Örn: Global pazarda %15 büyüme hedeflerken çalışan memnuniyetini de en üst düzeyde tutmak...",
-        height=140
-    )
+        # Chat kısıtlaması için aktif oturumu senkronize et
+        if (st.session_state.active_employee != employee_name or
+                st.session_state.active_target != target_type):
+            st.session_state.active_employee = employee_name
+            st.session_state.active_target = target_type
+            st.session_state.chat_history = []
+            st.session_state.current_goal_set = None
+            st.session_state.proposed_patch = None
+            st.session_state.eval_result = None
+            st.session_state.perf_res = None
+            st.session_state.regen_count = 0
+            st.session_state.chat_interaction_count = 0
+            st.session_state.ai_start_time = None
+            st.session_state.original_goal_set = None
 
-    st.markdown("---")
+        manager_vision = st.text_area(
+            "Yönetici Vizyonu",
+            placeholder="Örn: Global pazarda %15 büyüme hedeflerken çalışan memnuniyetini de en üst düzeyde tutmak...",
+            height=140
+        )
 
-    col_s1, col_s2 = st.columns(2)
-    with col_s1:
-        if st.button("♻️ Oturumu Temizle"):
+        st.markdown("---")
+
+        col_s1, col_s2 = st.columns(2)
+        with col_s1:
+            if st.button("♻️ Oturumu Temizle"):
+                for key in ["chat_history", "current_goal_set", "proposed_patch",
+                            "eval_result", "perf_res", "last_analysis"]:
+                    st.session_state[key] = None if key != "chat_history" else []
+                st.rerun()
+        with col_s2:
+            if st.button("🔄 Veri İndeksle"):
+                with st.spinner("İndeksleniyor..."):
+                    try:
+                        analyzer.vector_store.refresh_data()
+                        load_metadata_cached.clear()
+                        load_history_cached.clear()
+                        load_employee_metadata_cached.clear()
+                        st.success("✅ Veriler güncellendi!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Hata: {e}")
+
+        st.markdown("---")
+        if st.button("🚪 Çıkış Yap", width='stretch', type="secondary"):
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.rerun()
+
+        if st.button("🧹 Önbellek & Sistem Sıfırla", width='stretch'):
+            st.cache_resource.clear()
+            st.cache_data.clear()
             for key in ["chat_history", "current_goal_set", "proposed_patch",
                         "eval_result", "perf_res", "last_analysis"]:
                 st.session_state[key] = None if key != "chat_history" else []
+            st.success("Sistem sıfırlandı!")
             st.rerun()
-    with col_s2:
-        if st.button("🔄 Veri İndeksle"):
-            with st.spinner("İndeksleniyor..."):
-                try:
-                    analyzer.vector_store.refresh_data()
-                    load_metadata_cached.clear()
-                    load_history_cached.clear()
-                    load_employee_metadata_cached.clear()
-                    st.success("✅ Veriler güncellendi!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Hata: {e}")
 
-    if st.button("🧹 Önbellek & Sistem Sıfırla", use_container_width=True):
-        st.cache_resource.clear()
-        st.cache_data.clear()
-        for key in ["chat_history", "current_goal_set", "proposed_patch",
-                    "eval_result", "perf_res", "last_analysis"]:
-            st.session_state[key] = None if key != "chat_history" else []
-        st.success("Sistem sıfırlandı!")
-        st.rerun()
+        st.markdown(f"""
+        <p style='text-align:center; color:rgba(255,255,255,0.3); font-size:0.72rem; margin-top:1rem;'>
+            Engine v{getattr(analyzer, 'version', '—')}
+        </p>
+        """, unsafe_allow_html=True)
 
-    st.markdown(f"""
-    <p style='text-align:center; color:rgba(255,255,255,0.3); font-size:0.72rem; margin-top:1rem;'>
-        Engine v{getattr(analyzer, 'version', '—')}
-    </p>
-    """, unsafe_allow_html=True)
+# Admin değilse değişkenlerin tanımlı olduğundan emin ol
+if current_role != 'Admin':
+    pass  # employee_name, target_type, manager_vision sidebar bloğunda tanımlandı
+else:
+    employee_name = ""
+    target_type = ""
+    manager_vision = ""
 
 # ==============================================================================
-# ANA SAYFA
+# ANA SAYFA — ROLE GÖRE AYRIŞIM
 # ==============================================================================
 
-# Çalışan metadata'sını yükle (Unvan, Bölüm, Sicil)
+current_role = st.session_state.get('role', '')
+
+# ---- ADMIN: Sadece Admin Dashboard ----
+if current_role == 'Admin':
+    render_admin_dashboard()
+    st.stop()
+
+# ---- DİĞER ROLLER: Normal Çalışan/Yönetici Arayüzü ----
+
+# Çalışan metadata'sını yükle
 employee_metadata = {}
 if employee_name:
     employee_metadata = load_employee_metadata_cached(employee_name)
 
-# Header (metadata bilgileri ile)
 render_header(
     employee_name=employee_name,
     target_type=target_type,
     metadata=employee_metadata
 )
 
-# Metadata context string'i (chat için)
 metadata_ctx_parts = [f"Çalışan: {employee_name}"]
 if employee_metadata:
     for k, v in employee_metadata.items():
@@ -169,9 +260,26 @@ if employee_metadata:
 metadata_ctx_parts.append(f"Hedef Kategorisi: {target_type}")
 metadata_context_str = " | ".join(metadata_ctx_parts)
 
-# ==============================================================================
-# SEKMELER
-# ==============================================================================
+is_employee_locked = False
+emp_sicil_for_lock = employee_metadata.get('Sicil') if employee_metadata else None
+
+if emp_sicil_for_lock and target_type:
+    try:
+        from src.auth import get_db_session
+        from src.models import AnnualGoals
+        _lsess = get_db_session()
+        _locked_rec = _lsess.query(AnnualGoals).filter(
+            AnnualGoals.employee_sicil == emp_sicil_for_lock,
+            AnnualGoals.hedef_turu == target_type,
+            AnnualGoals.is_locked == True
+        ).first()
+        if _locked_rec:
+            is_employee_locked = True
+        _lsess.close()
+    except Exception:
+        pass
+
+is_disabled_by_lock = is_employee_locked if current_role != 'Admin' else False
 
 tab1, tab2, tab3 = st.tabs(["💬 Asistan", "📌 Hedef Süreci", "🔍 Performans Analizi"])
 
@@ -214,6 +322,10 @@ with tab1:
                 metadata_context=metadata_context_str,
                 current_goal_set=st.session_state.current_goal_set
             )
+            
+            # Telemetry: Chat etkileşimi artır. (Sistem AI hakkında chat ederse)
+            if st.session_state.get('current_goal_set'):
+                st.session_state.chat_interaction_count += 1
 
         # Bot yanıtını göster
         display_chat_message("bot", response)
@@ -229,20 +341,35 @@ with tab1:
 
 # ====================== TAB 2: HEDEF SÜRECİ ======================
 with tab2:
+    from src.ui_components import render_locked_goals
+    if emp_sicil_for_lock:
+        render_locked_goals(emp_sicil_for_lock)
+        st.markdown("---")
 
     # 1. BASELINE OLUŞTURMA
     if not st.session_state.current_goal_set:
+        if is_employee_locked:
+            st.error("🔒 Bu çalışanın bu kategorideki hedefleri KESİNLEŞTİRİLMİŞ(Kilitli)'tir. (Değişiklik yapamazsınız)")
+        
         st.info("Henüz aktif bir hedef seti yok. Yönetici vizyonunu girin ve **'✨ Hedef Setini Başlat'** butonuna basın.")
 
         if not manager_vision:
             st.warning("⚠️ Soldan yönetici vizyonunu doldurun.")
 
         if st.button("✨ Hedef Öner", use_container_width=True,
-                     disabled=not (employee_name and manager_vision)):
+                     disabled=is_disabled_by_lock or not (employee_name and manager_vision)):
             with st.spinner(f"🤖 {employee_name} için 3 SMART hedef oluşturuluyor..."):
                 history_df = load_history_cached(employee_name, target_type)
                 history_text = history_df.to_markdown(index=False) if not history_df.empty else "Sayısal veri yok."
                 goal_set = analyzer.analyze_and_suggest(employee_name, target_type, manager_vision, history_text)
+                
+                # Telemetry Initialize
+                import time, copy
+                st.session_state.ai_start_time = time.time()
+                st.session_state.regen_count += 1
+                st.session_state.chat_interaction_count = 0
+                st.session_state.original_goal_set = copy.deepcopy(goal_set)
+                
                 st.session_state.current_goal_set = goal_set
                 
                 # Uretilen hedefleri asistan sekmesine de düşür
@@ -284,12 +411,29 @@ with tab2:
                         st.session_state.eval_result = eval_res
 
             with col_act2:
-                if st.button("✏️ Revizyon İste", use_container_width=True):
+                if st.button("✏️ Revizyon İste", use_container_width=True, disabled=is_disabled_by_lock):
                     st.session_state.show_revision_input = True
 
             with col_act3:
                 if st.button("✅ Onayla & Kilitle", type="primary", use_container_width=True):
                     st.session_state.current_goal_set["status"] = "ACTIVE"
+                    
+                    # AI Telemetri: Onaylanan hedefleri DB'ye işaretle
+                    try:
+                        from src.auth import get_db_session
+                        from src.models import PerformanceHistory
+                        _sess = get_db_session()
+                        _records = _sess.query(PerformanceHistory).filter(
+                            PerformanceHistory.isim == employee_name
+                        ).all()
+                        for _r in _records:
+                            _r.is_ai_suggested = 'True'
+                            _r.ai_status = 'TAM_KABUL'
+                        _sess.commit()
+                        _sess.close()
+                    except Exception as _e:
+                        pass  # Telemetri hatası ana akışı durdurmasın
+                    
                     st.success("✅ Hedef Seti onaylandı ve ACTIVE olarak işaretlendi.")
 
             # Değerlendirme Sonucu
@@ -361,6 +505,9 @@ with tab2:
                         st.session_state.current_goal_set = gs
                         st.session_state.proposed_patch = None
                         
+                        # AI Telemetri: (Tarihi verilere değil, memory'de tutulacak çünkü AnnualGoals'da kaydedilecek)
+
+                        
                         # Revize edilen hedefi chat'e at
                         bot_msg = f"Hedefleriniz geri bildiriminiz doğrultusunda revize edildi (v{gs['version']}).\n\n"
                         bot_msg += analyzer.format_goal_set(gs)
@@ -372,6 +519,106 @@ with tab2:
                     if st.button("❌ Revizyonu Reddet"):
                         st.session_state.proposed_patch = None
                         st.rerun()
+
+        # Kesinleştir Button
+        if current_role in ['Manager', 'Admin'] and not is_employee_locked:
+            st.markdown("---")
+            if emp_sicil_for_lock and st.session_state['user_id'] == emp_sicil_for_lock:
+                st.warning("⚠️ Kendi hedeflerinizi kesinleştiremezsiniz. Sadece yöneticiniz onaylayabilir.")
+            else:
+                if st.button("🔒 Tüm Hedefleri Kesinleştir (Kilitle)", type="primary"):
+                    try:
+                        from src.auth import get_db_session
+                        from src.models import AnnualGoals
+                        import datetime
+                        _lsess = get_db_session()
+                        
+                        # --- TELEMETRY CALCULATIONS ---
+                        import time
+                        import difflib
+                        
+                        duration = 0
+                        if st.session_state.get('ai_start_time'):
+                            duration = int(time.time() - st.session_state.ai_start_time)
+                            duration = min(duration, 3600)  # Max 1 hour outlier clamp
+                            
+                        # 1. Eski AnnualGoals kayıtlarını temizle (aynı sicil+kategori için)
+                        _lsess.query(AnnualGoals).filter(
+                            AnnualGoals.employee_sicil == emp_sicil_for_lock,
+                            AnnualGoals.hedef_turu == target_type
+                        ).delete()
+                        
+                        # 2. Yeni hedefleri insert et
+                        gs_data = st.session_state.current_goal_set
+                        current_year = datetime.datetime.now().year + 1
+                        
+                        for idx, g in enumerate(gs_data.get("goals", [])):
+                            metric_val = str(g.get('metrics', {}).get('target_value', '0')).replace(',', '.')
+                            try:
+                                metric_float = float(metric_val)
+                            except:
+                                metric_float = 0.0
+                                
+                            # Text diff
+                            orig_text = ""
+                            if st.session_state.get('original_goal_set') and len(st.session_state.original_goal_set.get("goals", [])) > idx:
+                                orig_text = st.session_state.original_goal_set["goals"][idx].get("smart_goal", "")
+                                
+                            final_text = g.get('smart_goal', '')
+                            
+                            diff_pct = 0.0
+                            if orig_text and final_text:
+                                similarity = difflib.SequenceMatcher(None, orig_text, final_text).ratio()
+                                diff_pct = (1.0 - similarity) * 100.0
+                                
+                            ai_status = "Manuel"
+                            if st.session_state.get('original_goal_set'):
+                                ai_status = "Kabul" if diff_pct == 0.0 else "Revize"
+                                
+                            new_goal = AnnualGoals(
+                                employee_sicil=emp_sicil_for_lock,
+                                yil=current_year,
+                                hedef_turu=target_type,
+                                smart_hedef=final_text,
+                                hedef_degeri=metric_float,
+                                birim=g.get('metrics', {}).get('unit', ''),
+                                evidence_justification=g.get('evidence_justification', 'Gerekçe Yok'),
+                                is_locked=True,
+                                locked_by_sicil=st.session_state.get('user_id'),
+                                version_no=gs_data.get("version", 1),
+                                ai_status=ai_status,
+                                decision_duration=duration,
+                                revision_depth=diff_pct,
+                                regen_count=st.session_state.get('regen_count', 0),
+                                chat_interaction_count=st.session_state.get('chat_interaction_count', 0)
+                            )
+                            _lsess.add(new_goal)
+                            
+                        _lsess.commit()
+                        _lsess.close()
+                        st.success(f"✅ {employee_name} için {target_type} hedefleri KİLİTLENDİ.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Kilit uygulanamadı: {e}")
+        elif current_role == 'Admin' and is_employee_locked:
+            st.markdown("---")
+            if st.button("🔓 Kilidi Aç (Sadece Admin)"):
+                try:
+                    from src.auth import get_db_session
+                    from src.models import AnnualGoals
+                    _lsess = get_db_session()
+                    _records = _lsess.query(AnnualGoals).filter(
+                        AnnualGoals.employee_sicil == emp_sicil_for_lock,
+                        AnnualGoals.hedef_turu == target_type
+                    ).all()
+                    for _r in _records:
+                        _r.is_locked = False
+                    _lsess.commit()
+                    _lsess.close()
+                    st.success(f"🔓 {employee_name} için {target_type} hedefleri açıldı.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Kilit Açılamadı: {e}")
 
 # ====================== TAB 3: PERFORMANS ANALİZİ ======================
 with tab3:
