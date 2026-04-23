@@ -19,10 +19,10 @@ class Config:
     
     # Veritabanı Ayarları
     # Eski Yerel SQLite Bağlantısı
-    DATABASE_URL = os.environ.get('DATABASE_URL', f"sqlite:///{os.path.join(BASE_DIR, 'pms_sql.db')}")
+    #DATABASE_URL = os.environ.get('DATABASE_URL', f"sqlite:///{os.path.join(BASE_DIR, 'pms_sql.db')}")
     
     # Yeni Bulut PostgreSQL Bağlantısı (Supabase)
-    # DATABASE_URL = os.environ.get('DATABASE_URL')
+    DATABASE_URL = os.environ.get('DATABASE_URL')
     if not DATABASE_URL:
         raise ValueError("Kritik Hata: DATABASE_URL bulunamadı! Lütfen .env dosyanıza Supabase bağlantı linkini ekleyin.")
     
