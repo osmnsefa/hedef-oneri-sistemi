@@ -17,3 +17,4 @@ langchain-text-splitters
 tabulate
 psycopg2-binary
 Werkzeug==3.0.1
+torchvision
