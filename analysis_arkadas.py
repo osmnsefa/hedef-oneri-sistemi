@@ -13,44 +13,49 @@ logger = logging.getLogger(__name__)
 # ==============================================================================
 RISK_MATRIX = {
     "veri_tutarsizligi": {
+        "risk_tanimi": "Veri Tutarsızlığı",
         "kategori": "Veri",
         "olasilik": 4,
         "etki": 5,
         "skor": 20,
         "oncelik": "Kritik",
-        "mitigation": "Otomatik doğrulama ve %80 eksik veri filtresi"
+        "mitigation": "Veri giriş aşamasında otomatik doğrulama (validation) kuralları ve eksik veri tamamlama algoritmaları entegre edilecektir."
     },
     "yetki_ihlali": {
+        "risk_tanimi": "Yetki İhlali",
         "kategori": "Güvenlik",
         "olasilik": 2,
         "etki": 5,
         "skor": 10,
         "oncelik": "Orta",
-        "mitigation": "RBAC kontrolü ve Audit logging"
+        "mitigation": "Rol Tabanlı Erişim Kontrolü (RBAC) testleri her sprint sonunda tekrarlanacak ve log kayıtları izlenecektir."
     },
     "nlp_hatalari": {
+        "risk_tanimi": "NLP Hataları",
         "kategori": "Teknik",
         "olasilik": 3,
         "etki": 3,
         "skor": 9,
         "oncelik": "Orta",
-        "mitigation": "Gerekçe Kartı ve Çıktı Doğrulama"
+        "mitigation": "Duygu analizi modülü, sektörel veri setleriyle (Fine-tuning) eğitilecek ve önerilerin yanına 'Gerekçe Kartı' eklenecektir."
     },
     "kullanici_direnci": {
+        "risk_tanimi": "Kullanıcı Direnci",
         "kategori": "Operasyonel",
         "olasilik": 3,
         "etki": 3,
         "skor": 9,
         "oncelik": "Orta",
-        "mitigation": "XAI (Açıklanabilir YZ) ve Karar Destek vurgusu"
+        "mitigation": "Sistemin 'karar verici' değil 'destekleyici' olduğu vurgulanacak ve açıklanabilir YZ (XAI) çıktıları ile güven artırılacaktır."
     },
     "hiyerarsi_kisiti": {
+        "risk_tanimi": "Hiyerarşi Kısıtı",
         "kategori": "Operasyonel",
         "olasilik": 2,
         "etki": 2,
         "skor": 4,
         "oncelik": "Düşük",
-        "mitigation": "Manuel Override ve Yönetici Onayı"
+        "mitigation": "Kritik roller ve acil durumlar için yöneticilere 'Manuel Override' (Sistemi Ezme) yetkisi tanımlanacaktır."
     }
 }
 
@@ -113,106 +118,6 @@ class RiskEngine:
             active_risks.append(RISK_MATRIX["nlp_hatalari"])
             
         return active_risks
-
-class DecisionSupportEngine:
-    def calculate_success_probability(self, history_df, suggested_response):
-        """Geçmiş verilere ve önerilen hedefin niteliğine göre başarı olasılığını hesaplar."""
-        if history_df.empty:
-            return 65 # Varsayılan makul güven
-
-        try:
-            # 1. Sayısal Geçmiş Performansı (%70 ağırlık)
-            ratios = []
-            for _, row in history_df.iterrows():
-                h = float(row.get('Hedef Değeri', 100))
-                g = float(row.get('Gerçekleşen Değer', 80))
-                ratios.append(g / h if h != 0 else 0)
-            
-            avg_ratio = sum(ratios) / len(ratios) if ratios else 0.8
-            last_ratio = ratios[-1] if ratios else avg_ratio
-            
-            stat_prob = (avg_ratio * 0.4 + last_ratio * 0.6)
-            
-            # 2. Önerilen Hedefin Karmaşıklığı/Risk Analizi (%30 ağırlık)
-            # İnovasyon kelimesi geçiyorsa risk biraz artar ama ödül yüksektir
-            risk_bonus = 0
-            if "inovasyon" in suggested_response.lower() or "yeni" in suggested_response.lower():
-                risk_bonus = -0.1 # Daha zor hedef
-            if "tekrarlı" in suggested_response.lower() or "standart" in suggested_response.lower():
-                risk_bonus = 0.05 # Daha kolay hedef
-                
-            final_prob = (stat_prob + risk_bonus) * 100
-            return min(max(int(final_prob), 15), 98) 
-        except:
-            return 70
-
-    def calculate_risk_score(self, history_df, alignment_values):
-        """Stratejik risk skorunu hesaplar (0-100)."""
-        score = 20 # Baz risk
-        
-        # Veri azlığı riski
-        if len(history_df) < 5:
-            score += 30
-            
-        # Odak dağılımı riski (Tek bir yere aşırı yüklenme)
-        max_focus = max(alignment_values.values()) if alignment_values else 0
-        if max_focus > 70:
-            score += 25
-            
-        return min(score, 100)
-
-    def analyze_challenge_level(self, last_val, suggested_val):
-        """Hedefin zorluk seviyesini belirler."""
-        if not last_val or not suggested_val:
-            return "Belirsiz"
-            
-        try:
-            increase = (suggested_val - last_val) / last_val
-            if increase < 0.05: return "Düşük (Güvenli)"
-            if increase < 0.15: return "Dengeli"
-            if increase < 0.30: return "Agresif"
-            return "Yüksek Riskli"
-        except:
-            return "Dengeli"
-
-    def get_strategic_alignment(self, suggested_goals_text):
-        """Hedeflerin stratejik odak dağılımını analiz eder."""
-        themes = {
-            "Kalite/Hata": ["kalite", "hata", "sıfır", "revizyon", "kpi"],
-            "Hız/Zaman": ["hız", "süre", "teslim", "zaman", "deadline"],
-            "Maliyet/Verim": ["maliyet", "verim", "tasarruf", "optimizasyon"],
-            "İnovasyon": ["yeni", "arge", "patent", "tasarım", "inovasyon"]
-        }
-        
-        distribution = {k: 0 for k in themes.keys()}
-        total_hits = 0
-        
-        for theme, keywords in themes.items():
-            for kw in keywords:
-                if kw in suggested_goals_text.lower():
-                    distribution[theme] += 1
-                    total_hits += 1
-        
-        if total_hits == 0: 
-            return {
-                "values": {k: 25 for k in themes.keys()}, 
-                "descriptions": {k: "Veri yetersizliğinden dolayı varsayılan dağılım." for k in themes.keys()}
-            }
-        
-        distribution_pct = {k: int((v/total_hits)*100) for k, v in distribution.items()}
-        
-        # Detaylı analiz metinleri ekle
-        details = {
-            "Kalite/Hata": "Hata payını minimize eden ve operasyonel mükemmelliği hedefleyen bir yaklaşım.",
-            "Hız/Zaman": "Teslimat sürelerini optimize eden ve çevikliği artıran zaman odaklı hedefler.",
-            "Maliyet/Verim": "Kaynak kullanımını optimize eden ve birim maliyeti düşüren verimlilik odağı.",
-            "İnovasyon": "Yeni teknolojiler ve yaratıcı yaklaşımlarla fark yaratan gelişim alanları."
-        }
-        
-        return {
-            "values": distribution_pct,
-            "descriptions": details
-        }
 
 
 # ==============================================================================
@@ -277,7 +182,6 @@ class Analyzer:
         self.data_validator = DataQualityValidator()
         self.response_validator = ResponseValidator()
         self.risk_engine = RiskEngine()
-        self.dss_engine = DecisionSupportEngine()
 
     def _apply_deterministic_constraints(self, llm_response, history_text, risk_report=None):
         """
@@ -347,48 +251,43 @@ class Analyzer:
         # 5. DETERMINISTIK KISIT VE RİSK RAPORU
         final_response = self._apply_deterministic_constraints(response, history_text, risk_report=active_risks)
         
-        # 6. DSS KATMANI (İsteğe bağlı - UI'da detaylandırılabilir ama prompt içinden senaryolar geliyor)
+        # Karar destek veya ekstra raporlama eklenebilir, şu an sadece final_response dönülüyor.
         return final_response
-
-    def get_decision_support_metrics(self, employee_name, target_type, suggested_response, history_df):
-        """
-        Yönetici için karar destek metriklerini hesaplar.
-        """
-        avg_success = history_df['Gerçekleşen Değer'].mean() if not history_df.empty else 0
-        benchmark_val = "+%12" if avg_success > 85 else "+%5"
-        
-        alignment = self.dss_engine.get_strategic_alignment(suggested_response)
-        
-        metrics = {
-            "success_probability": self.dss_engine.calculate_success_probability(history_df, suggested_response),
-            "strategic_alignment": alignment,
-            "benchmark_status": f"Bölüm Ortalamasının {benchmark_val} Üzerinde",
-            "skill_impact": "Teknik Yetkinlik Kazanımı (%20 Verim Artışı Potansiyeli)",
-            "risk_score": self.dss_engine.calculate_risk_score(history_df, alignment["values"])
-        }
-        return metrics
 
     def analyze_risk_factors(self, employee_name, target_type, history_text):
         """
         LLM kullanarak personelin ve hedeflerin önündeki spesifik risk faktörlerini analiz eder.
+        PMI Standartları RISK_MATRIX kullanılarak analiz genişletilir.
         """
         rag_query = f"{employee_name} {target_type} alanındaki geçmiş hatalar gecikmeler riskler yetkinlik eksiklikleri"
         unstructured_context = self.vector_store.get_context(rag_query)
 
         user_prompt = f"""
-        {employee_name} isimli çalışanın '{target_type}' hedefleri için spesifik RİSK FAKTÖRLERİ analizi yap.
+        Sen sistemin "Risk ve Güvenlik Yöneticisi"sin. Görevin {employee_name} isimli çalışanın '{target_type}' hedefleri için DERİNLEMESİNE BİR RİSK ANALİZİ yapmaktır.
         
-        === VERİLER ===
+        === ÇALIŞAN VE BAĞLAM VERİLERİ ===
         Sayısal Geçmiş: {history_text}
-        Sözel Kayıtlar: {unstructured_context}
+        Sözel Kayıtlar/Performans Detayları: {unstructured_context}
         
-        Lütfen tam olarak şu formatta bir tablo ve özet dön:
-        1. "Faktör | Seviye | Etki" kolonlarından oluşan bir tablo.
-        2. Seviye: Düşük, Orta, Yüksek.
-        3. Etki: -%X (Başarı olasılığına etkisi).
-        4. Tablonun altına "### ⚠️ En Kritik Risk: [Risk Adı]" başlığıyla bir açıklama ekle.
+        Sistemimizde tanımlı olan 5 adet PMI standartlarına dayalı sabit risk kategorisi şunlardır:
+        1. Veri Tutarsızlığı (Kritik)
+        2. Yetki İhlali (Orta)
+        3. NLP Hataları (Orta)
+        4. Kullanıcı Direnci (Orta)
+        5. Hiyerarşi Kısıtı (Düşük)
         
-        Örnek Faktörler: Yetkinlik Boşluğu, Operasyonel Yük, Kaynak Kısıtı, Geçmiş Teknik Hatalar vb.
+        Lütfen aşağıdaki şablona tam olarak uyarak raporunu oluştur:
+        
+        ### 1. LİTERATÜR (PMI) RİSKLERİ UYUM ANALİZİ
+        (Sistemdeki 5 sabit riskten hangileri bu çalışan özelinde geçmiş verilere ve görevlere bakıldığında "Aktif Risk" haline gelebilir? Örneğin veri seti çok eksikse "Veri Tutarsızlığı" tetiklenecektir. Uygun olan 1 veya 2 tanesini detaylıca gerekçelendir.)
+        
+        ### 2. ÇALIŞANA ÖZGÜ GİZLİ RİSKLER (YAPAY ZEKA TESPİTİ)
+        (PMI matrisi dışında, doğrudan çalışanın verilerinden çıkarım yaptığın, o kişiye veya işe özgü en az 2 risk tespit et. Örn: "Teknik Borç Birikimi", "Tükenmişlik (Burnout) Belirtisi", "Proje Gecikme Alışkanlığı" vb. Gerekçeleriyle belirt.)
+        
+        ### 3. RİSK HAFİFLETME (MITIGATION) VE AKSİYON PLANI
+        (Tespit edilen tüm bu spesifik risklerin olasılığını ve etkisini düşürmek için yöneticiye verilecek 3 adet nokta atışı, tamamen somut eylem önerisi.)
+        
+        Lütfen raporu son derece profesyonel, analitik ve doğrudan konuya giren bir üslupla Türkçe yaz.
         """
 
         return self.llm_client.generate_response(

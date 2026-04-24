@@ -146,44 +146,49 @@ EVALUATE_SCHEMA = """
 # ==============================================================================
 RISK_MATRIX = {
     "veri_tutarsizligi": {
+        "risk_tanimi": "Veri Tutarsızlığı",
         "kategori": "Veri",
         "olasilik": 4,
         "etki": 5,
         "skor": 20,
         "oncelik": "Kritik",
-        "mitigation": "Otomatik doğrulama ve %80 eksik veri filtresi"
+        "mitigation": "Veri giriş aşamasında otomatik doğrulama (validation) kuralları ve eksik veri tamamlama algoritmaları entegre edilecektir."
     },
     "yetki_ihlali": {
+        "risk_tanimi": "Yetki İhlali",
         "kategori": "Güvenlik",
         "olasilik": 2,
         "etki": 5,
         "skor": 10,
         "oncelik": "Orta",
-        "mitigation": "RBAC kontrolü ve Audit logging"
+        "mitigation": "Rol Tabanlı Erişim Kontrolü (RBAC) testleri her sprint sonunda tekrarlanacak ve log kayıtları izlenecektir."
     },
     "nlp_hatalari": {
+        "risk_tanimi": "NLP Hataları",
         "kategori": "Teknik",
         "olasilik": 3,
         "etki": 3,
         "skor": 9,
         "oncelik": "Orta",
-        "mitigation": "Gerekçe Kartı ve Çıktı Doğrulama"
+        "mitigation": "Duygu analizi modülü, sektörel veri setleriyle (Fine-tuning) eğitilecek ve önerilerin yanına 'Gerekçe Kartı' eklenecektir."
     },
     "kullanici_direnci": {
+        "risk_tanimi": "Kullanıcı Direnci",
         "kategori": "Operasyonel",
         "olasilik": 3,
         "etki": 3,
         "skor": 9,
         "oncelik": "Orta",
-        "mitigation": "XAI (Açıklanabilir YZ) ve Karar Destek vurgusu"
+        "mitigation": "Sistemin 'karar verici' değil 'destekleyici' olduğu vurgulanacak ve açıklanabilir YZ (XAI) çıktıları ile güven artırılacaktır."
     },
     "hiyerarsi_kisiti": {
+        "risk_tanimi": "Hiyerarşi Kısıtı",
         "kategori": "Operasyonel",
         "olasilik": 2,
         "etki": 2,
         "skor": 4,
         "oncelik": "Düşük",
-        "mitigation": "Manuel Override ve Yönetici Onayı"
+        "mitigation": "Kritik roller ve acil durumlar için yöneticilere 'Manuel Override' (Sistemi Ezme) yetkisi tanımlanacaktır."
     }
 }
 
@@ -506,23 +511,35 @@ class Analyzer:
 
     def analyze_risk_factors(self, employee_name, target_type, history_text):
         """LLM kullanarak personelin ve hedeflerin önündeki spesifik risk faktörlerini analiz eder."""
-        rag_query = f"{employee_name} {target_type} geçmiş hatalar gecikmeler riskler yetkinlik eksiklikleri"
+        rag_query = f"{employee_name} {target_type} alanındaki geçmiş hatalar gecikmeler riskler yetkinlik eksiklikleri"
         unstructured_context = self.vector_store.get_context(rag_query)
 
         user_prompt = f"""
-        {employee_name} isimli çalışanın '{target_type}' hedefleri için spesifik RİSK FAKTÖRLERİ analizi yap.
+        Sen sistemin "Risk ve Güvenlik Yöneticisi"sin. Görevin {employee_name} isimli çalışanın '{target_type}' hedefleri için DERİNLEMESİNE BİR RİSK ANALİZİ yapmaktır.
         
-        === VERİLER ===
+        === ÇALIŞAN VE BAĞLAM VERİLERİ ===
         Sayısal Geçmiş: {history_text}
         Sözel Kayıtlar: {unstructured_context}
         
-        Lütfen tam olarak şu formatta bir tablo ve özet dön:
-        1. "Faktör | Seviye | Etki" kolonlarından oluşan bir markdown tablosu.
-        2. Seviye: Düşük, Orta, Yüksek.
-        3. Etki: -%X (Başarı olasılığına etkisi).
-        4. Tablonun altına "### ⚠️ En Kritik Risk: [Risk Adı]" başlığıyla bir açıklama ekle.
+        Sistemimizde tanımlı olan 5 adet PMI standartlarına dayalı sabit risk kategorisi şunlardır:
+        1. Veri Tutarsızlığı (Kritik)
+        2. Yetki İhlali (Orta)
+        3. NLP Hataları (Orta)
+        4. Kullanıcı Direnci (Orta)
+        5. Hiyerarşi Kısıtı (Düşük)
         
-        Örnek Faktörler: Yetkinlik Boşluğu, Operasyonel Yük, Kaynak Kısıtı, Geçmiş Teknik Hatalar vb.
+        Lütfen aşağıdaki şablona tam olarak uyarak raporunu oluştur:
+        
+        ### PMI (Literatür) Riskleri
+        (Sistemdeki 5 sabit riskten hangileri bu çalışan özelinde geçmiş verilere ve görevlere bakıldığında "Aktif Risk" haline gelebilir? Örneğin veri seti çok eksikse "Veri Tutarsızlığı" tetiklenecektir. Uygun olan 1 veya 2 tanesini detaylıca gerekçelendir.)
+        
+        ### Çalışana Özgü Gizli Riskler
+        (PMI matrisi dışında, doğrudan çalışanın verilerinden çıkarım yaptığın, o kişiye veya işe özgü en az 2 risk tespit et. Örn: "Teknik Borç Birikimi", "Tükenmişlik (Burnout) Belirtisi", "Proje Gecikme Alışkanlığı" vb. Gerekçeleriyle belirt.)
+        
+        ### Risk Hafifletme (Mitigation) Planı
+        (Tespit edilen tüm bu spesifik risklerin olasılığını ve etkisini düşürmek için yöneticiye verilecek 3 adet nokta atışı, tamamen somut eylem önerisi.)
+        
+        Lütfen raporu son derece profesyonel, analitik ve doğrudan konuya giren bir üslupla Türkçe yaz.
         """
 
         return self.llm_client.generate_response(
