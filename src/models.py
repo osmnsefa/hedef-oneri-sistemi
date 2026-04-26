@@ -61,6 +61,7 @@ class AnnualGoals(Base):
     hedef_degeri = Column(Float, nullable=True)
     birim = Column(String, nullable=True)
     evidence_justification = Column(Text, nullable=True)
+    hedef_yonu = Column(String, default="Artan")
     
     is_locked = Column(Boolean, default=False)
     locked_by_sicil = Column(String, nullable=True)

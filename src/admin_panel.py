@@ -37,6 +37,30 @@ def _load_all_ph() -> pd.DataFrame:
     finally:
         session.close()
 
+def _load_locked_goals() -> pd.DataFrame:
+    session = get_db_session()
+    try:
+        from src.models import AnnualGoals, Employee
+        rows = session.query(AnnualGoals, Employee).join(Employee, AnnualGoals.employee_sicil == Employee.user_sicil).filter(AnnualGoals.is_locked == True).all()
+        data = []
+        for g, emp in rows:
+            data.append({
+                "Sicil": g.employee_sicil,
+                "İsim": f"{emp.first_name} {emp.last_name}",
+                "Bölüm": emp.department,
+                "Yıl": g.yil,
+                "Hedef Türü": g.hedef_turu,
+                "SMART Hedef": g.smart_hedef,
+                "Hedef Değeri": g.hedef_degeri,
+                "Hedef Yönü": getattr(g, "hedef_yonu", "Artan"),
+                "Kesinleştiren": g.locked_by_sicil
+            })
+        return pd.DataFrame(data)
+    except Exception:
+        return pd.DataFrame()
+    finally:
+        session.close()
+
 
 # ---------------------------------------------------------------------------
 # SEKMELİ ANA FONKSİYON
@@ -63,27 +87,42 @@ def render_admin_dashboard():
     with tab_rep:
         st.subheader("📋 Kurumsal Raporlar")
 
-        df_all = _load_all_ph()
+        def clear_ghost_data():
+            keys_to_clear = ["goal_set", "analysis_complete", "current_employee_sicil", "manager_vision"]
+            for k in keys_to_clear:
+                if k in st.session_state:
+                    del st.session_state[k]
 
-        if df_all.empty:
-            st.info("Veritabanında henüz performans kaydı yok.")
+        df_all = _load_all_ph()
+        df_locked = _load_locked_goals()
+
+        if df_all.empty and df_locked.empty:
+            st.info("Veritabanında henüz performans kaydı veya kilitli hedef yok.")
             return
 
         # Hiyerarşik filtre: Bölüm → Çalışan
-        departments = ["Tümü"] + sorted(df_all["Bölüm"].dropna().unique().tolist())
-        sel_dept = st.selectbox("Bölüm", departments, key="rep_dept")
+        departments = ["Tümü"] + sorted(df_all["Bölüm"].dropna().unique().tolist()) if not df_all.empty else ["Tümü"]
+        sel_dept = st.selectbox("Bölüm", departments, key="rep_dept", on_change=clear_ghost_data)
 
         df_filtered = df_all if sel_dept == "Tümü" else df_all[df_all["Bölüm"] == sel_dept]
+        
+        if not df_locked.empty:
+            df_locked_filtered = df_locked if sel_dept == "Tümü" else df_locked[df_locked["Bölüm"] == sel_dept]
+        else:
+            df_locked_filtered = df_locked
 
-        employees_in_dept = ["Tümü"] + sorted(df_filtered["İsim"].dropna().unique().tolist())
-        sel_emp = st.selectbox("Çalışan", employees_in_dept, key="rep_emp")
+        employees_in_dept = ["Tümü"] + sorted(df_filtered["İsim"].dropna().unique().tolist()) if not df_filtered.empty else ["Tümü"]
+        sel_emp = st.selectbox("Çalışan", employees_in_dept, key="rep_emp", on_change=clear_ghost_data)
 
         if sel_emp != "Tümü":
-            df_filtered = df_filtered[df_filtered["İsim"] == sel_emp]
+            if not df_filtered.empty:
+                df_filtered = df_filtered[df_filtered["İsim"] == sel_emp]
+            if not df_locked_filtered.empty:
+                df_locked_filtered = df_locked_filtered[df_locked_filtered["İsim"] == sel_emp]
 
             # Sicil Numarasını df_filtered'den çekelim
             try:
-                emp_sicil = str(df_filtered["Sicil No"].iloc[0])
+                emp_sicil = str(df_filtered["Sicil"].iloc[0]) # "Sicil No" yerine "Sicil" _load_all_ph içinde tanımlı
                 st.markdown("---")
                 from src.ui_components import render_locked_goals
                 render_locked_goals(emp_sicil)
@@ -91,12 +130,22 @@ def render_admin_dashboard():
                 pass
 
         st.markdown("---")
-        st.dataframe(df_filtered, use_container_width=True)
+        st.markdown("### 📊 Geçmiş Performans Verileri")
+        if not df_filtered.empty:
+            st.dataframe(df_filtered, use_container_width=True)
+        else:
+            st.info("Geçmiş kayıt bulunamadı.")
+
+        st.markdown("### 🔒 Yeni Kesinleşmiş (Kilitli) Hedefler")
+        if df_locked_filtered.empty:
+            st.info("Seçili kriterlere uygun kilitlenmiş hedef bulunamadı.")
+        else:
+            st.dataframe(df_locked_filtered, use_container_width=True)
 
         # İndir butonları
         col_dl1, col_dl2, col_dl3 = st.columns(3)
         with col_dl1:
-            if sel_emp != "Tümü":
+            if sel_emp != "Tümü" and not df_filtered.empty:
                 csv = df_filtered.to_csv(index=False).encode("utf-8-sig")
                 st.download_button(
                     "⬇️ Çalışan Raporu",
@@ -105,7 +154,7 @@ def render_admin_dashboard():
                     mime="text/csv"
                 )
         with col_dl2:
-            if sel_dept != "Tümü":
+            if sel_dept != "Tümü" and not df_filtered.empty:
                 csv = df_filtered.to_csv(index=False).encode("utf-8-sig")
                 st.download_button(
                     "⬇️ Bölüm Raporu",
@@ -114,13 +163,14 @@ def render_admin_dashboard():
                     mime="text/csv"
                 )
         with col_dl3:
-            csv_all = df_all.to_csv(index=False).encode("utf-8-sig")
-            st.download_button(
-                "⬇️ Şirket Geneli Raporu",
-                data=csv_all,
-                file_name="sirket_geneli_raporu.csv",
-                mime="text/csv"
-            )
+            if not df_all.empty:
+                csv_all = df_all.to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    "⬇️ Şirket Geneli Raporu",
+                    data=csv_all,
+                    file_name="sirket_geneli_raporu.csv",
+                    mime="text/csv"
+                )
 
     # ==========================================================================
     # SEKME 2 — YÖNETİCİ DAVRANIŞ ANALİZİ

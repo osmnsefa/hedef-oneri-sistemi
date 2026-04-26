@@ -32,9 +32,24 @@ DATA_PRIORITY = """
 
 MATH_RULES = """
 ### MATEMATİKSEL CLAMP (KISITLAMA) KURALLARI ###
+
+⚠️ KRİTİK KURAL — HEDEF YÖNÜ:
+- Her metriğin bir "Hedef Yönü" vardır: "Artan" veya "Azalan".
+- "Artan" metrikler (örn: satış, verimlilik, kalite skoru): Hedef değer ÜST sınıra doğru gitmeli — ARTTIRILIR.
+- "Azalan" metrikler (örn: hata oranı, maliyet, gecikme süresi): Hedef değer ALT sınıra doğru gitmeli — AZALTILIR.
+- YASAK: "Azalan" hedefli bir metriği ASLA artırma! Bu mantık hatasıdır.
+- YASAK: "Artan" hedefli bir metriği ASLA azaltma! Bu da mantık hatasıdır.
+- TAM SAYI KURALI: Hesaplanacak her bir "target_value" kesinlikle en yakın tam sayıya yuvarlanmalıdır. Örn: 15.84 veya 15.2 yerine sadece tam sayı olarak 15 veya 16 yaz.
+
+ARTAN metrikler için bant ve cap:
 - ZAYIF: Artış %10-15 | ORTA: Artış %10-20 | GÜÇLÜ: Artış %15-25.
-- HARD CAP: Hiçbir revizyon son gerçekleşmenin %30'unu aşamaz.
-- NEGATİF TREND: 3 dönem düşüş varsa artış yasaktır (Toparlama hedefi).
+- HARD CAP (ARTAN): Hiçbir revizyon son gerçekleşmenin %30 üzerine çıkamaz.
+- NEGATİF TREND (ARTAN): 3 dönem düşüş varsa artış yasaktır (Toparlama hedefi).
+
+AZALAN metrikler için bant ve cap:
+- ZAYIF: Azalış %5-10 | ORTA: Azalış %10-20 | GÜÇLÜ: Azalış %15-25.
+- HARD CAP (AZALAN): Hiçbir revizyon son gerçekleşmenin %30'dan fazlasını azaltamaz.
+- POZİTİF TREND (AZALAN): 3 dönem art arda artış varsa daha agresif azalış hedeflenebilir.
 """
 
 MASTERMIND_RULES = """
@@ -67,14 +82,15 @@ GOAL_SET_SCHEMA = """
     {
       "id": "goal_1",
       "title": "string (profesyonel ve kurumsal başlık)",
-      "smart_goal": "string (S-M-A-R-T cümle: içinde hedef rakamı ve zaman çerçevesi MUTLAKA geçmeli. Örn: '2027 yılı sonuna kadar X metriğini Y'den Z değerine çıkarmak')",
+      "smart_goal": "string (S-M-A-R-T cümle: içinde hedef rakamı ve zaman çerçevesi MUTLAKA geçmeli. Asla ondalık sayı kullanma, doğrudan net hedef belirt. Örn: 'Doğru stok sayımı oranını %95\\'e çıkarmak.')",
       "context": "string (GEÇMİŞ VERİYE VE GÖREV TANIMI'NA DAYALI gerekçe: bu hedef neden seçildi, geçmişte ne oldu, şimdi ne hedefleniyor)",
-      "evidence_justification": "string (Bu hedefin mantıksal dayanağı: 1. Geçmiş performanstaki durum ve metrikler nelerdi? 2. Çalışanın görev tanımıyla nasıl bağlantılı? 3. Geri bildirimlerdeki hangi noktayı adresliyor? Bu 3 başlığı da barındıran destekleyici tek bir mantıksal kanıt paragrafı)",
+      "evidence_justification": "string (Bu hedefin mantıksal dayanağı: 1. Geçmiş performans, 2. Görev tanımı, 3. Geri bildirim dayanaklarını içeren kanıt paragrafı)",
       "metrics": {
-        "previous_value": 0.0,
-        "target_value": 0.0,
-        "increase_rate_percent": 0.0,
-        "metric_key": "string (ölçülen birimin adı, örn: 'hata oranı %', 'müşteri memnuniyet puanı', 'tamamlanan proje sayısı')"
+        "previous_value": 0,
+        "target_value": 0,
+        "direction": "Artan | Azalan",
+        "change_rate_percent": 0.0,
+        "metric_key": "string (ölçülen birimin adı)"
       }
     },
     {
@@ -82,11 +98,12 @@ GOAL_SET_SCHEMA = """
       "title": "string",
       "smart_goal": "string (içinde hedef rakamı ve zaman çerçevesi MUTLAKA geçmeli)",
       "context": "string (geçmiş + görev tanımı gerekçesi)",
-      "evidence_justification": "string (Bu hedefin mantıksal dayanağı: Geçmiş performans, Görev tanımı ve Geri bildirim dayanaklarını içeren kanıt paragrafı)",
+      "evidence_justification": "string (Bu hedefin mantıksal dayanağı)",
       "metrics": {
-        "previous_value": 0.0,
-        "target_value": 0.0,
-        "increase_rate_percent": 0.0,
+        "previous_value": 0,
+        "target_value": 0,
+        "direction": "Artan | Azalan",
+        "change_rate_percent": 0.0,
         "metric_key": "string"
       }
     },
@@ -95,17 +112,19 @@ GOAL_SET_SCHEMA = """
       "title": "string",
       "smart_goal": "string (içinde hedef rakamı ve zaman çerçevesi MUTLAKA geçmeli)",
       "context": "string (geçmiş + görev tanımı gerekçesi)",
-      "evidence_justification": "string (Bu hedefin mantıksal dayanağı: Geçmiş performans, Görev tanımı ve Geri bildirim dayanaklarını içeren kanıt paragrafı)",
+      "evidence_justification": "string (Bu hedefin mantıksal dayanağı)",
       "metrics": {
-        "previous_value": 0.0,
-        "target_value": 0.0,
-        "increase_rate_percent": 0.0,
+        "previous_value": 0,
+        "target_value": 0,
+        "direction": "Artan | Azalan",
+        "change_rate_percent": 0.0,
         "metric_key": "string"
       }
     }
   ],
   "self_check": {
     "math_compliance": true,
+    "direction_compliance": true,
     "task_compliance": true,
     "weakness_compensated": true
   }
@@ -121,12 +140,13 @@ PATCH_SCHEMA = """
       "field": "metrics.target_value | title | smart_goal",
       "old_value": "any",
       "new_value": "any",
-      "reason": "Değişiklik özeti ve eğer varsa Clamping (kurallara takılma) gerekçesi (Örn: %30 kuralı nedeniyle talep edilen artış tıraşlandı).",
+      "reason": "Değişiklik özeti. Eğer Hedef Yönü 'Azalan' ise yeni değer eski değerden KÜÇÜK olmalıdır. Clamping veya Hedef Yönü kuralları devreye girdiyse açıklanmalı.",
       "evidence_justification": "string (bu değişikliğin dayanağı)"
     }
   ],
   "self_check": {
     "math_compliance": true,
+    "direction_compliance": true,
     "feedback_aligned": true
   }
 }
@@ -239,7 +259,12 @@ class DecisionSupportEngine:
             for _, row in history_df.iterrows():
                 h = float(row.get('Hedef Değeri', 100))
                 g = float(row.get('Gerçekleşen Değer', 80))
-                ratios.append(g / h if h != 0 else 0)
+                yon = row.get('Hedef Yönü', 'Artan') # Hedef yönünü çek
+                if str(yon).strip().lower() == 'azalan':
+                    # Azalan hedefte gerçekleşen değer hedef değerden küçükse daha iyidir
+                    ratios.append(h / g if g != 0 else 1.2)
+                else:
+                    ratios.append(g / h if h != 0 else 0.8)
             
             avg_ratio = sum(ratios) / len(ratios) if ratios else 0.8
             last_ratio = ratios[-1] if ratios else avg_ratio
@@ -390,17 +415,17 @@ class Analyzer:
         KESİN KURALLAR — HEPSİNE UYULACAK:
         1. Hedef sayısı KESİNLİKLE 3 olmalı. Ne 2 ne 4 — tam olarak 3.
         2. Her hedef SADECE '{target_type}' kategorisiyle ilgili olmalı. Başka kategori yasak.
-        3. 'smart_goal' cümlesi içinde hedef rakamı (target_value) ve zaman çerçevesi ({get_target_year()} sonu gibi) MUTLAKA geçmeli.
-           Örnek: '{get_target_year()} yıl sonuna kadar müşteri memnuniyet skorunu 72 puandan 88 puana çıkarmak.'
-        4. 'context' alanı: geçmiş veriye DOĞRUDAN atıf yaparak başlamali. Örn: 'Geçen dönem hedef X gerçekleşen Y oldu, bu nedenle...'
-           Eğer görev tanımı/kanıtlarda da destek varsa onu da bağla.
-        5. 'evidence_justification' alanı şu ÜÇ DAYANAĞI içeren mantıksal bir açıklama paragrafı olmalıdır:
+        3. 'smart_goal' cümlesi içinde hedef rakamı (target_value) ve zaman çerçevesi ({get_target_year()} sonu gibi) MUTLAKA geçmeli. Ondalık sayı kullanma, doğrudan tam sayılarla net hedef belirt.
+        4. HEDEF YÖNÜ KURALI (ÇOK KRİTİK): Geçmiş verideki "Hedef Yönü" veya bağlama göre:
+           • Hata, maliyet, gecikme gibi düşürülmesi gereken şeyler için yönü "Azalan" yap ve target_value < previous_value (AZALT).
+           • Ciro, müşteri memnuniyeti, verimlilik gibi yükseltilmesi gerekenler için yönü "Artan" yap ve target_value > previous_value (ARTIR).
+        5. 'context' alanı: geçmiş veriye DOĞRUDAN atıf yaparak başlamali. Örn: 'Geçen dönem hedef X gerçekleşen Y oldu, bu nedenle...'
+        6. 'evidence_justification' alanı şu ÜÇ DAYANAĞI içeren mantıksal bir açıklama paragrafı olmalıdır:
            - GEÇMİŞ VERİ & TREND: Metrik olarak neden bu target_value seçildi?
            - GÖREV TANIMI: Bu sayısal artış personelin ana sorumluluklarıyla ve kurumsal rolüyle nasıl bağdaşıyor?
-           - GERİ BİLDİRİM: Bu hedef, çalışanın yıllık değerlendirmelerindeki (gelişim/güçlü alan) hangi noktayı destekliyor/iyileştiriyor?
-           DİKKAT KANIT UYDURMA YASAĞI: Eğer bu üç dayanaktan birinde (örneğin Geri Bildirimlerde) ilgili hedefe dair açık/destekleyici bir veri veya metin YOKSA, KESİNLİKLE hikaye uydurma. "Geri bildirimlerde bu spesifik konuda doğrudan bir destek/kanıt bulunmamaktadır" diyerek sadece mevcut verilere dayan.
-        6. %30 HARD LIMIT (ÇOK KRİTİK): Çıkaracağın hiçbir hedefin 'target_value' değeri, 'previous_value' değerinden %30'dan daha fazla YÜKSEK OLAMAZ. Bu kuralı AŞMAK KESİNLİKLE YASAKTIR. Eğer %30'u aştığını hesaplarsan değeri geri düşür.
-        7. KALİTATİF BAĞLAM: Önerilerini oluştururken sayısal verilerin yanı sıra yukarıdaki görev tanımı ve geri bildirimlerdeki teknik/sosyal yetkinlikleri de mutlaka dikkate al.
+           - GERİ BİLDİRİM: Bu hedef, çalışanın yıllık değerlendirmelerindeki hangi noktayı destekliyor/iyileştiriyor?
+        7. %30 HARD LIMIT (ÇOK KRİTİK): 'target_value' değeri, 'previous_value' değerinden oransal olarak en fazla %30 değişebilir.
+        8. KALİTATİF BAĞLAM: Önerilerini oluştururken görev tanımı ve geri bildirimleri dikkate al.
         
         Format: {GOAL_SET_SCHEMA}
         Lütfen geçerli bir JSON döndür. goal_set_id'yi '{goal_set_uuid}' olarak ata.
@@ -451,8 +476,9 @@ class Analyzer:
         YÖNETİCİ GERİ BİLDİRİMİ:
         "{feedback}"
         
-        Bu geri bildirime göre bir PATCH üret. Kuralları (%30 cap, band limitleri) asla ihlal etme.
-        DİKKAT: %30 HARD LIMIT KURALI geçerlidir. Eğer yönetici %30'dan daha yüksek bir artış talep ederse, değeri tam %30 limitine çekerek (clamping yaparak) 'reason' alanında HANGİ kuralın devreye girdiğini mutlaka açıkla (Örn: "%30 limiti kuralı nedeniyle hedef talep edilen X değerine değil limit olan Y değerine çekilmiştir").
+        Bu geri bildirime göre bir PATCH üret.
+        ⚠️ HEDEF YÖNÜ KURALI: "Azalan" yönlü hedefte new_value eski değerden KÜÇÜK olmalı. "Artan" yönlü hedefte new_value eski değerden BÜYÜK olmalı. Yönetici yanlış yön istese bile matematiksel kuralı uygula ve reason'da açıkla.
+        DİKKAT: %30 HARD LIMIT KURALI geçerlidir. Eğer yönetici %30'dan daha yüksek bir değişim talep ederse, limiti uygula (clamping) ve 'reason' alanında açıkla.
         'evidence_justification' alanına somut gerekçe yaz.
         
         Format: {PATCH_SCHEMA}
@@ -701,30 +727,50 @@ class Analyzer:
         if "error" in data:
             return f"⚠️ **Hata:** {data['error']}\n\n*Ham Yanıt:* {data.get('raw', '')[:300]}"
 
-        tier_map = {"Weak": "🔴 Zayıf", "Mid": "🟡 Orta", "Strong": "🟢 Güçlü"}
+        tier_map = {
+            "Weak": "🔴 Gelişime Açık", 
+            "Mid": "🟡 Beklentiyi Karşılayan", 
+            "Strong": "🟢 Güçlü Beklenti Üstü"
+        }
+        status_map = {
+            "BASELINE": "Yeni Taslak",
+            "PROPOSED": "Onay Bekleyen Revizyon",
+            "ACTIVE": "Onaylı / Kilitlendi"
+        }
+        
         tier = tier_map.get(data.get('performance_tier', ''), data.get('performance_tier', 'Bilinmiyor'))
+        display_status = status_map.get(data.get('status'), data.get('status', ''))
 
-        m = f"## 🎯 Hedef Seti v{data.get('version', 1)} · `{data.get('status', 'BASELINE')}`\n\n"
+        m = f"## 🎯 Hedef Seti v{data.get('version', 1)} · `{display_status}`\n\n"
         m += f"> **📊 Performans Katmanı:** {tier}\n\n"
         m += f"> **🔍 Analiz Özeti:** {data.get('analysis_summary', '-')}\n\n"
         m += "---\n\n"
 
         for i, g in enumerate(data.get('goals', []), 1):
             metrics = g.get('metrics', {})
-            prev = metrics.get('previous_value', '-')
-            target = metrics.get('target_value', '-')
-            rate = metrics.get('increase_rate_percent', '-')
+            direction = metrics.get('direction', 'Artan')
+            arrow = "⬆️" if direction == "Artan" else "⬇️"
+            
+            p_val = metrics.get('previous_value', '-')
+            t_val = metrics.get('target_value', '-')
+            if isinstance(p_val, float) and p_val.is_integer(): p_val = int(p_val)
+            if isinstance(t_val, float) and t_val.is_integer(): t_val = int(t_val)
+            
+            rate = metrics.get('change_rate_percent', metrics.get('increase_rate_percent', '-'))
+            change_label = f"%{abs(rate) if isinstance(rate, (int, float)) else rate} {'artış' if direction == 'Artan' else 'azalış'}"
 
             m += f"### Hedef {i}: {g.get('title', '')}\n\n"
             m += f"**🎯 SMART Hedef:**\n{g.get('smart_goal', '-')}\n\n"
             m += f"**📌 Bağlam & Analiz:**\n{g.get('context', '-')}\n\n"
-            m += f"**📈 Metrikler:** `{prev}` → **`{target}`** *(+%{rate} artış)*\n\n"
+            m += f"**📈 Metrikler:** `{p_val}` → **`{t_val}`** {arrow} *({change_label})* | Hedef Yönü: **{direction}**\n\n"
             m += f"**🔬 Kanıt & Gerekçe:**\n> {g.get('evidence_justification', '-')}\n\n"
             m += "---\n\n"
 
         sc = data.get('self_check', {})
+        direction_ok = sc.get('direction_compliance', True)
         m += "### 🛡️ Sistem Mühürü\n"
         m += f"- Matematik Uyumu: {'✅' if sc.get('math_compliance') else '❌'}\n"
+        m += f"- Yön Uyumu: {'✅' if direction_ok else '❌'}\n"
         m += f"- Görev Uyumu: {'✅' if sc.get('task_compliance') else '❌'}\n"
         m += f"- Zayıf Yön Telafisi: {'✅' if sc.get('weakness_compensated') else '❌'}\n"
         return m

@@ -66,11 +66,12 @@ from src.auth import render_login_screen
 init_session()
 
 # ==============================================================================
-# VERİTABANI BAŞLATMA (DB BOŞSA SEED)
+# VERİTABANI BAŞLATMA (DB BOŞSA SEED + OTOMATİK MİGRASYON)
 # ==============================================================================
-from src.auth import get_db_session
+from src.auth import get_db_session, get_engine
 from src.models import User
 import logging
+from sqlalchemy import text
 
 try:
     _sys_sess = get_db_session()
@@ -88,10 +89,34 @@ try:
         logging.info("Veritabanı boş veya tablolar eksik, ilk kurulum (seed) yapılıyor...")
         from seed import run_seed
         run_seed()
-        
+
+    # ── OTOMATİK KOLON MİGRASYONU ──────────────────────────────────────────
+    # Supabase'deki annual_goals tablosuna yeni eklenen kolonları kontrol et.
+    # Kolon yoksa ekle (idempotent — defalarca çalışsa sorun olmaz).
+    try:
+        _engine = get_engine()
+        with _engine.connect() as _conn:
+            # PostgreSQL: information_schema ile kolon varlığını kontrol et
+            _result = _conn.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'annual_goals' 
+                  AND column_name = 'hedef_yonu'
+            """))
+            if _result.fetchone() is None:
+                _conn.execute(text(
+                    "ALTER TABLE annual_goals ADD COLUMN hedef_yonu VARCHAR DEFAULT 'Artan'"
+                ))
+                _conn.commit()
+                logging.info("✅ Migration: 'hedef_yonu' kolonu annual_goals tablosuna eklendi.")
+    except Exception as _mig_err:
+        logging.warning(f"Migration kontrolü sırasında uyarı (büyük ihtimalle kolon zaten var): {_mig_err}")
+    # ────────────────────────────────────────────────────────────────────────
+
     _sys_sess.close()
 except Exception as e:
     logging.error(f"Veritabanı başlatma hatası: {e}")
+
 
 # ==============================================================================
 # LOGIN KONTROLÜ
@@ -281,7 +306,7 @@ if emp_sicil_for_lock and target_type:
 
 is_disabled_by_lock = is_employee_locked if current_role != 'Admin' else False
 
-tab1, tab2, tab3 = st.tabs(["💬 Asistan", "📌 Hedef Süreci", "🔍 Performans Analizi"])
+tab1, tab2, tab3, tab4 = st.tabs(["💬 Asistan", "📌 Hedef Süreci", "🔍 Performans Analizi", "📁 Atanan Hedefler"])
 
 # ====================== TAB 1: CHAT ASISTAN ======================
 with tab1:
@@ -341,10 +366,6 @@ with tab1:
 
 # ====================== TAB 2: HEDEF SÜRECİ ======================
 with tab2:
-    from src.ui_components import render_locked_goals
-    if emp_sicil_for_lock:
-        render_locked_goals(emp_sicil_for_lock)
-        st.markdown("---")
 
     # 1. BASELINE OLUŞTURMA
     if not st.session_state.current_goal_set:
@@ -583,6 +604,7 @@ with tab2:
                                 hedef_degeri=metric_float,
                                 birim=g.get('metrics', {}).get('unit', ''),
                                 evidence_justification=g.get('evidence_justification', 'Gerekçe Yok'),
+                                hedef_yonu=g.get('metrics', {}).get('direction', 'Artan'),
                                 is_locked=True,
                                 locked_by_sicil=st.session_state.get('user_id'),
                                 version_no=gs_data.get("version", 1),
@@ -651,3 +673,128 @@ with tab3:
                 st.dataframe(history_df, use_container_width=True)
             else:
                 st.info("Bu çalışan ve kategori için geçmiş veri bulunamadı.")
+
+# ====================== TAB 4: ATANAN HEDEFLER ======================
+with tab4:
+    st.markdown(f"""
+    <div style="
+        background: linear-gradient(135deg, #f0fdf4, #dcfce7);
+        border: 1px solid #86efac;
+        border-radius: 12px;
+        padding: 0.9rem 1.4rem;
+        margin-bottom: 1.2rem;
+    ">
+        <p style="margin:0; font-size:1rem; color:#15803d; font-weight:700;">
+            📁 <b>Atanan & Kesinleşmiş Hedefler</b> — {employee_name if employee_name else '—'}
+        </p>
+        <p style="margin:0.2rem 0 0 0; font-size:0.82rem; color:#166534;">
+            Aşağıdaki hedefler yönetici tarafından onaylanmış ve sisteme kalıcı olarak kaydedilmiştir.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if not emp_sicil_for_lock:
+        st.warning("⚠️ Hedefleri görüntülemek için önce sol menüden geçerli bir çalışan seçin.")
+    else:
+        try:
+            from src.auth import get_db_session
+            from src.models import AnnualGoals, Employee
+            import datetime as _dt
+            import pandas as _pd
+
+            _asess = get_db_session()
+            _all_locked = _asess.query(AnnualGoals).filter(
+                AnnualGoals.employee_sicil == emp_sicil_for_lock,
+                AnnualGoals.is_locked == True
+            ).order_by(AnnualGoals.yil.desc(), AnnualGoals.hedef_turu).all()
+
+            if not _all_locked:
+                st.info("Bu çalışana ait kesinleştirilmiş hedef bulunmamaktadır. Hedef Süreci sekmesinden yeni hedef oluşturup onaylayabilirsiniz.")
+            else:
+                # ── Özet metrik kartları ──────────────────────────────────────
+                _total = len(_all_locked)
+                _artan = sum(1 for g in _all_locked if getattr(g, 'hedef_yonu', 'Artan') == 'Artan')
+                _azalan = _total - _artan
+                _mc1, _mc2, _mc3 = st.columns(3)
+                _mc1.metric("📌 Toplam Kilitli Hedef", _total)
+                _mc2.metric("⬆️ Artan Hedefler", _artan)
+                _mc3.metric("⬇️ Azalan Hedefler", _azalan)
+                st.markdown("---")
+
+                # ── Excel görünümlü tablo ─────────────────────────────────────
+                # Başlık satırı
+                _hc = st.columns([0.4, 1.2, 0.8, 2.8, 0.7, 0.7, 0.5, 0.5])
+                _headers = ["Yıl", "Tür", "Yön", "SMART Hedef", "Önceki", "Hedef", "Değişim", "İşlem"]
+                for _h, _col in zip(_headers, _hc):
+                    _col.markdown(f'<div class="excel-table-header">{_h}</div>', unsafe_allow_html=True)
+
+                _export_rows = []
+                for _goal in _all_locked:
+                    _yil = _goal.yil
+                    _tur = _goal.hedef_turu
+                    _yon = getattr(_goal, 'hedef_yonu', 'Artan')
+                    _arrow = "⬆️" if _yon == "Artan" else "⬇️"
+                    _smart = _goal.smart_hedef or "—"
+                    _hedef_val = _goal.hedef_degeri
+
+                    # Önceki değeri geçmiş tablosundan çek
+                    _prev_val = "—"
+                    try:
+                        _hist = load_history_cached(employee_name, _tur)
+                        if not _hist.empty:
+                            _prev_col = next((c for c in _hist.columns if 'gerçekleşen' in c.lower() or 'gerceklesen' in c.lower()), None)
+                            if _prev_col:
+                                _prev_val = _hist[_prev_col].dropna().iloc[-1] if not _hist[_prev_col].dropna().empty else "—"
+                    except Exception:
+                        pass
+
+                    # Değişim oranı hesapla
+                    _change_str = "—"
+                    try:
+                        _p = float(str(_prev_val).replace(',', '.'))
+                        _t = float(str(_hedef_val).replace(',', '.'))
+                        if _p != 0:
+                            _chg = ((_t - _p) / abs(_p)) * 100
+                            _sign = "▲" if _chg >= 0 else "▼"
+                            _change_str = f"{_sign} %{abs(_chg):.1f}"
+                    except Exception:
+                        pass
+
+                    _rc = st.columns([0.4, 1.2, 0.8, 2.8, 0.7, 0.7, 0.5, 0.5])
+                    _rc[0].markdown(f'<div class="excel-table-row">{_yil}</div>', unsafe_allow_html=True)
+                    _rc[1].markdown(f'<div class="excel-table-row">{_tur}</div>', unsafe_allow_html=True)
+                    _rc[2].markdown(f'<div class="excel-table-row">{_arrow} {_yon}</div>', unsafe_allow_html=True)
+                    _rc[3].markdown(f'<div class="excel-table-row">{_smart}</div>', unsafe_allow_html=True)
+                    _rc[4].markdown(f'<div class="excel-table-row">{_prev_val}</div>', unsafe_allow_html=True)
+                    _rc[5].markdown(f'<div class="excel-table-row"><b>{_hedef_val}</b></div>', unsafe_allow_html=True)
+                    _rc[6].markdown(f'<div class="excel-table-row">{_change_str}</div>', unsafe_allow_html=True)
+                    with _rc[7]:
+                        if st.button("🗑️", key=f"tab4_del_{_goal.id}", help="Bu hedefi kalıcı olarak sil"):
+                            _asess.delete(_goal)
+                            _asess.commit()
+                            st.success(f"✅ Hedef silindi.")
+                            st.rerun()
+
+                    _export_rows.append({
+                        "Yıl": _yil, "Hedef Türü": _tur, "Yön": _yon,
+                        "SMART Hedef": _smart, "Önceki Değer": _prev_val,
+                        "Hedef Değeri": _hedef_val, "Değişim": _change_str,
+                        "Kilitleyen": _goal.locked_by_sicil
+                    })
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # ── CSV İndirme ───────────────────────────────────────────────
+                _df_exp = _pd.DataFrame(_export_rows)
+                _csv_exp = _df_exp.to_csv(index=False).encode("utf-8-sig")
+                st.download_button(
+                    label="📄 Tüm Hedefleri Dışa Aktar (CSV)",
+                    data=_csv_exp,
+                    file_name=f"{_dt.datetime.now().strftime('%Y%m%d')}_{emp_sicil_for_lock}_atanan_hedefler.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
+            _asess.close()
+        except Exception as _tab4_err:
+            st.error(f"Hedefler yüklenirken hata oluştu: {_tab4_err}")
