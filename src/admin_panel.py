@@ -59,6 +59,7 @@ def _load_locked_goals() -> pd.DataFrame:
                 "SMART Hedef": g.smart_hedef,
                 "Hedef Değeri": g.hedef_degeri,
                 "Hedef Yönü": getattr(g, "hedef_yonu", "Artan"),
+                "Vizyon Hırs Düzeyi": getattr(g, "vision_ambition_level", None) or "Bilinmiyor",
                 "Kesinleştiren": g.locked_by_sicil
             })
         return pd.DataFrame(data)
@@ -558,6 +559,61 @@ def render_admin_dashboard():
                         "Yeniden Üretme": "{:.1f}",
                         "Chat Etkileşimi": "{:.1f}"
                     }), use_container_width=True)
+
+                    # ── VİZYON HIRS DAĞILIMI — Plotly (Organizational Learning) ──
+                    st.markdown("---")
+                    st.markdown("### 📊 Vizyon Hırs Dağılımı")
+                    st.caption(
+                        "Akademik dayanak: EU AI Act 2024 Art. 12-14 — İzlenebilirlik (Traceability) "
+                        "ve Denetim Gereksinimleri; NIST AI RMF 1.0 (2023) — GOVERN Fonksiyonu; "
+                        "Kurumsal hafızanın oluşması için geçmiş vizyon kararları denetlenebilir "
+                        "bir kayda aktarılmalıdır."
+                    )
+                    df_locked2 = _load_locked_goals()
+                    if not df_locked2.empty and "Vizyon Hırs Düzeyi" in df_locked2.columns:
+                        ambition_counts = df_locked2["Vizyon Hırs Düzeyi"].value_counts().reset_index()
+                        ambition_counts.columns = ["Düzey", "Hedef Sayısı"]
+                        color_map = {
+                            "Agresif":   "#dc2626",
+                            "Dengeli":   "#16a34a",
+                            "Zayıf":    "#f59e0b",
+                            "Bilinmiyor": "#94a3b8",
+                        }
+                        colors = [color_map.get(d, "#94a3b8") for d in ambition_counts["Düzey"]]
+                        try:
+                            col_pie, col_bar = st.columns(2)
+                            with col_pie:
+                                fig_pie = go.Figure(go.Pie(
+                                    labels=ambition_counts["Düzey"],
+                                    values=ambition_counts["Hedef Sayısı"],
+                                    marker=dict(colors=colors),
+                                    hole=0.4,
+                                    textinfo="label+percent"
+                                ))
+                                fig_pie.update_layout(
+                                    title="Hırs Düzeyi Dağılımı",
+                                    height=320, margin=dict(t=40, b=10)
+                                )
+                                st.plotly_chart(fig_pie, use_container_width=True)
+                            with col_bar:
+                                fig_bar = go.Figure(go.Bar(
+                                    x=ambition_counts["Düzey"],
+                                    y=ambition_counts["Hedef Sayısı"],
+                                    marker_color=colors,
+                                    text=ambition_counts["Hedef Sayısı"],
+                                    textposition="outside"
+                                ))
+                                fig_bar.update_layout(
+                                    title="Hırs Düzeyi — Hedef Adet",
+                                    height=320, margin=dict(t=40, b=10),
+                                    xaxis_title="Düzey", yaxis_title="Adet"
+                                )
+                                st.plotly_chart(fig_bar, use_container_width=True)
+                        except ImportError:
+                            st.dataframe(ambition_counts, use_container_width=True)
+                            st.caption("⚠️ Plotly yüklenmemiş. `pip install plotly` ile kurabilirsiniz.")
+                    else:
+                        st.info("İstihbarat katmanı verileri henüz mevcut değil. Vizyon analizi yapılmış ve kilitlenmiş hedef bulunmamaktadır.")
         finally:
             session.close()
 

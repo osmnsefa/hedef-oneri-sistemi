@@ -82,7 +82,7 @@ GOAL_SET_SCHEMA = """
     {
       "id": "goal_1",
       "title": "string (profesyonel ve kurumsal başlık)",
-      "smart_goal": "string (S-M-A-R-T cümle: içinde hedef rakamı ve zaman çerçevesi MUTLAKA geçmeli. Asla ondalık sayı kullanma, doğrudan net hedef belirt. Örn: 'Doğru stok sayımı oranını %95\\'e çıkarmak.')",
+      "smart_goal": "string (S-M-A-R-T cümle: içinde hedef rakamı ve zaman çerçevesi MUTLAKA geçmeli. Asla ondalık sayı kullanma, doğrudan net hedef belirt. Örn: 'Doğru stok sayımı oranını %95\'e çıkarmak.')",
       "context": "string (GEÇMİŞ VERİYE VE GÖREV TANIMI'NA DAYALI gerekçe: bu hedef neden seçildi, geçmişte ne oldu, şimdi ne hedefleniyor)",
       "evidence_justification": "string (Bu hedefin mantıksal dayanağı: 1. Geçmiş performans, 2. Görev tanımı, 3. Geri bildirim dayanaklarını içeren kanıt paragrafı)",
       "vision_alignment_note": "string (Bu hedef vizyonun hangi temasını karşılıyor? MAKSIMUM 15 KELIME. Örn: 'Operasyonel mükemmellik temasını; kalite odağıyla destekliyor.')",
@@ -150,6 +150,7 @@ VISION_DECODE_SCHEMA = """
   "key_signals": ["string (vizyondan çıkarılan 2-3 anahtar sinyal)"]
 }
 """
+
 
 PATCH_SCHEMA = """
 {
@@ -351,6 +352,10 @@ class DecisionSupportEngine:
 
 
 # ==============================================================================
+# 🚀 ANALYZER CLASS
+# ==============================================================================
+
+# ==============================================================================
 # 🔮 VİZYON DECODER
 # Akademik Çerçeve:
 #   - Locke & Latham (2019) "The development of goal setting theory:
@@ -541,6 +546,7 @@ class DevilsAdvocateEngine:
             "risk_score": risk_score
         }
 
+
 # ==============================================================================
 # 🚀 ANALYZER CLASS
 # ==============================================================================
@@ -575,6 +581,7 @@ class Analyzer:
     def analyze_and_suggest(self, employee_name, target_type, manager_vision, history_text,
                             sicil_no=None, employee_title=None, decoded_vision=None):
         """v1 (BASELINE) Hedef Seti Üretimi - Tam olarak 3 SMART hedef"""
+
         
         # 1. VERİ KALİTE KONTROLÜ (Pre-processing Risk Layer)
         data_check = self.data_validator.validate_history(history_text)
@@ -647,7 +654,7 @@ class Analyzer:
         - Hedef Kategorisi: {target_type}
         - Yönetici Vizyonu: {manager_vision}
         {vision_context}
-        - Geçmiş Performans Verileri (Bu sayılar metrik hesaplamalarının TEMELİ):
+        - Geçmiş Performans Verileri (Bu sayılar metrik hesaplamalarının TEMEİ):
         {history_text if history_text else "Geçmiş veri bulunamadı. Görev tanımı ve yönetici vizyonuna dayalı hedef üret."}
         
         {kurumsal_baglaml}
@@ -665,7 +672,7 @@ class Analyzer:
         6. 'evidence_justification' alanı şu ÜÇ DAYANAĞI içeren mantıksal bir açıklama paragrafı olmalıdır:
            - GEÇMİŞ VERİ & TREND: Metrik olarak neden bu target_value seçildi?
            - GÖREV TANIMI: Bu sayısal artış personelin ana sorumluluklarıyla ve kurumsal rolüyle nasıl bağdaşıyor?
-           - GERİ BİLDİRİM: Bu hedef, çalışanın yıllık değerlendirmelerindeki hangi noktayı destekliyor/iyileştiriyor?
+           - GERİ BİLDİRİM: Bu hedef, çalışanın yıllık değerlendirmelerindeki hangi noktasını destekliyor/iyileştiriyor?
         7. %30 HARD LIMIT (ÇOK KRİTİK): 'target_value' değeri, 'previous_value' değerinden oransal olarak en fazla %30 değişebilir.
         8. KALİTATİF BAĞLAM: Önerilerini oluştururken görev tanımı ve geri bildirimleri dikkate al.
         9. 'vision_alignment_note' alanı: Her hedef için MUTLAKA doldur. MAKSİMUM 15 KELİME. Örn: 'Büyüme temasını; pazar payı odaklı hedefle karşılıyor.'
@@ -673,6 +680,7 @@ class Analyzer:
         Format: {GOAL_SET_SCHEMA}
         Lütfen geçerli bir JSON döndür. goal_set_id'yi '{goal_set_uuid}' olarak ata.
         """
+
 
         response = self.llm_client.generate_response(
             system_prompt=self.build_system_prompt("GENERATE"),
@@ -1007,6 +1015,8 @@ class Analyzer:
             m += f"**📌 Bağlam & Analiz:**\n{g.get('context', '-')}\n\n"
             m += f"**📈 Metrikler:** `{p_val}` → **`{t_val}`** {arrow} *({change_label})* | Hedef Yönü: **{direction}**\n\n"
             m += f"**🔬 Kanıt & Gerekçe:**\n> {g.get('evidence_justification', '-')}\n\n"
+            if g.get('vision_alignment_note'):
+                m += f"**🔗 Vizyon Bağlantısı:** _{g.get('vision_alignment_note')}_\n\n"
             m += "---\n\n"
 
         sc = data.get('self_check', {})

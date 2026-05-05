@@ -73,7 +73,7 @@ class AnnualGoals(Base):
     revision_depth = Column(Float, default=0.0) # 0.0 ile 100.0 arası yüzde
     regen_count = Column(Integer, default=0)
     chat_interaction_count = Column(Integer, default=0)
-    
+
     # Vizyon İstihbarat Katmanı (Vision Intelligence Layer)
     # Akademik dayanak: Locke & Latham (2019) Goal-Setting Theory: Half Century
     # Retrospective + OKR (Niven & Lamorte, 2022)

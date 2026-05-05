@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from src.config import Config
-from src.ui_components import load_custom_css, render_header, display_chat_message, render_dss_metrics
+from src.ui_components import load_custom_css, render_header, display_chat_message, render_dss_metrics, render_vision_card, render_devils_advocate_warning, render_vision_traceability
 from src.analysis import Analyzer
 from src.data_loader import DataLoader
 from src.admin_panel import render_admin_dashboard
@@ -56,6 +56,7 @@ def init_session():
         "perf_res": None,
         "active_employee": "",
         "active_target": "",
+        "decoded_vision": None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -104,11 +105,22 @@ try:
                   AND column_name = 'hedef_yonu'
             """))
             if _result.fetchone() is None:
-                _conn.execute(text(
-                    "ALTER TABLE annual_goals ADD COLUMN hedef_yonu VARCHAR DEFAULT 'Artan'"
-                ))
+                _conn.execute(text("ALTER TABLE annual_goals ADD COLUMN hedef_yonu VARCHAR DEFAULT 'Artan'"))
                 _conn.commit()
                 logging.info("✅ Migration: 'hedef_yonu' kolonu annual_goals tablosuna eklendi.")
+                
+            _result_vision = _conn.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'annual_goals' 
+                  AND column_name = 'vision_text'
+            """))
+            if _result_vision.fetchone() is None:
+                _conn.execute(text("ALTER TABLE annual_goals ADD COLUMN vision_text TEXT"))
+                _conn.execute(text("ALTER TABLE annual_goals ADD COLUMN vision_ambition_level VARCHAR"))
+                _conn.execute(text("ALTER TABLE annual_goals ADD COLUMN vision_stretch_factor FLOAT"))
+                _conn.commit()
+                logging.info("✅ Migration: Vizyon kolonları (vision_text, vision_ambition_level, vision_stretch_factor) annual_goals tablosuna eklendi.")
     except Exception as _mig_err:
         logging.warning(f"Migration kontrolü sırasında uyarı (büyük ihtimalle kolon zaten var): {_mig_err}")
     # ────────────────────────────────────────────────────────────────────────
@@ -195,6 +207,7 @@ with st.sidebar:
             st.session_state.chat_interaction_count = 0
             st.session_state.ai_start_time = None
             st.session_state.original_goal_set = None
+            st.session_state.decoded_vision = None
 
         manager_vision = st.text_area(
             "Yönetici Vizyonu",
@@ -208,7 +221,7 @@ with st.sidebar:
         with col_s1:
             if st.button("♻️ Oturumu Temizle"):
                 for key in ["chat_history", "current_goal_set", "proposed_patch",
-                            "eval_result", "perf_res", "last_analysis"]:
+                            "eval_result", "perf_res", "last_analysis", "decoded_vision"]:
                     st.session_state[key] = None if key != "chat_history" else []
                 st.rerun()
         with col_s2:
@@ -234,7 +247,7 @@ with st.sidebar:
             st.cache_resource.clear()
             st.cache_data.clear()
             for key in ["chat_history", "current_goal_set", "proposed_patch",
-                        "eval_result", "perf_res", "last_analysis"]:
+                        "eval_result", "perf_res", "last_analysis", "decoded_vision"]:
                 st.session_state[key] = None if key != "chat_history" else []
             st.success("Sistem sıfırlandı!")
             st.rerun()
@@ -382,7 +395,12 @@ with tab2:
             with st.spinner(f"🤖 {employee_name} için 3 SMART hedef oluşturuluyor..."):
                 history_df = load_history_cached(employee_name, target_type)
                 history_text = history_df.to_markdown(index=False) if not history_df.empty else "Sayısal veri yok."
-                goal_set = analyzer.analyze_and_suggest(employee_name, target_type, manager_vision, history_text)
+                
+                # --- NEW LOGIC: VİZYON ÇÖZÜMLEME ---
+                decoded_vision = analyzer.vision_decoder.decode(manager_vision)
+                st.session_state.decoded_vision = decoded_vision
+                
+                goal_set = analyzer.analyze_and_suggest(employee_name, target_type, manager_vision, history_text, decoded_vision=decoded_vision)
                 
                 # Telemetry Initialize
                 import time, copy
@@ -402,7 +420,6 @@ with tab2:
                     
                 st.rerun()
 
-    # 2. AKTİF HEDEF SETİ
     else:
         gs = st.session_state.current_goal_set
 
@@ -412,13 +429,29 @@ with tab2:
                 st.session_state.current_goal_set = None
                 st.rerun()
         else:
-            st.markdown(analyzer.format_goal_set(gs))
-
             # Karar Destek Sistemi (DSS) ve Risk Metrikleri
             history_df = load_history_cached(employee_name, target_type)
             suggested_goals_text = " ".join([g.get('smart_goal', '') for g in gs.get('goals', [])])
             dss_metrics = analyzer.get_decision_support_metrics(history_df, suggested_goals_text)
             
+            # --- VİZYON KARTI VE DEVIL'S ADVOCATE UYARISI ---
+            decoded_vision = st.session_state.get('decoded_vision')
+            if decoded_vision:
+                with st.sidebar:
+                    render_vision_card(decoded_vision)
+                
+                da_result = analyzer.devils_advocate.evaluate(
+                    decoded_vision,
+                    dss_metrics.get("success_probability", 65),
+                    dss_metrics.get("risk_score", 50)
+                )
+                render_devils_advocate_warning(da_result)
+
+            st.markdown(analyzer.format_goal_set(gs))
+
+            if decoded_vision:
+                render_vision_traceability(gs, decoded_vision)
+
             with st.expander("📊 Karar Destek Sistemi (Açıklanabilir YZ)", expanded=True):
                 render_dss_metrics(dss_metrics, employee_name)
 
@@ -596,6 +629,8 @@ with tab2:
                             if st.session_state.get('original_goal_set'):
                                 ai_status = "Kabul" if diff_pct == 0.0 else "Revize"
                                 
+                            decoded_v = st.session_state.get('decoded_vision', {})
+                                
                             new_goal = AnnualGoals(
                                 employee_sicil=emp_sicil_for_lock,
                                 yil=current_year,
@@ -612,7 +647,10 @@ with tab2:
                                 decision_duration=duration,
                                 revision_depth=diff_pct,
                                 regen_count=st.session_state.get('regen_count', 0),
-                                chat_interaction_count=st.session_state.get('chat_interaction_count', 0)
+                                chat_interaction_count=st.session_state.get('chat_interaction_count', 0),
+                                vision_text=manager_vision,
+                                vision_ambition_level=decoded_v.get("ambition_level"),
+                                vision_stretch_factor=decoded_v.get("stretch_factor")
                             )
                             _lsess.add(new_goal)
                             

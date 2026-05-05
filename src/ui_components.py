@@ -369,3 +369,206 @@ def render_locked_goals(employee_sicil):
         st.error(f"Kilitli hedefler yüklenirken hata oluştu: {e}")
     finally:
         session.close()
+
+# ==============================================================================
+# 📡 VİZYON İSTİHBARAT KARTI
+# Akademik Çerçeve:
+#   - Wickens (2021) "Attention: Theory and Practice" — Çoklu kaynak
+#     dikkat teorisi ile yönetici arayüzü bilişsel yükü optimize edilir.
+#   - ISO 9241-210:2019 — İnsan Merkezli Tasarım (Human-Centred Design)
+#     etkileşimli sistemler için uluslararası standart.
+# ==============================================================================
+
+def render_vision_card(decoded_vision: dict):
+    """
+    Sidebar için sade Vizyon İstihbarat Kartı.
+
+    Akademik dayanak:
+    • Wickens (2021) — Çoklu Kaynak Dikkat Teorisi (Multiple Resource
+      Theory); yönetici arayüzünde bilişsel yük minimize edilmeli,
+      arka plan hesaplamaları net sinyallere çevrilmelidir.
+    • ISO 9241-210:2019 — Etkileşimli sistemlerde insan merkezli
+      tasarım prensipleri; kullanıcının ihtiyaç ve bağlamı ön planda.
+    """
+    if not decoded_vision or decoded_vision.get("vision_summary") in ("", "Vizyon girilmedi.", "Vizyon analizi yapılamadı.", None):
+        return
+
+    ambition = decoded_vision.get("ambition_level", "Dengeli")
+    stretch = decoded_vision.get("stretch_factor", 0.5)
+    risk = decoded_vision.get("risk_appetite", "Orta")
+    summary = decoded_vision.get("vision_summary", "")
+    themes = decoded_vision.get("focus_themes", [])
+
+    # Renk ve ikon kodlaması
+    ambition_style = {
+        "Agresif": ("#dc2626", "🔴"),
+        "Dengeli": ("#16a34a", "🟢"),
+        "Zayıf":   ("#f59e0b", "🟡"),
+    }
+    color, icon = ambition_style.get(ambition, ("#64748b", "⚪"))
+
+    # Tema satırı
+    theme_html = ""
+    for t in themes[:3]:
+        w = int(t.get("weight", 0) * 100)
+        th = t.get("theme", "")
+        if w > 0:
+            theme_html += f'<span style="background:rgba(255,255,255,0.15);border-radius:4px;padding:2px 6px;font-size:0.72rem;margin-right:4px;">{th} %{w}</span>'
+
+    st.markdown(f"""
+    <div style="
+        background: linear-gradient(135deg, #1e3a5f 0%, #162d4a 100%);
+        border: 1px solid {color};
+        border-radius: 10px;
+        padding: 0.75rem 1rem;
+        margin-top: 0.5rem;
+    ">
+        <p style="color:rgba(255,255,255,0.6); font-size:0.7rem; font-weight:700;
+                  letter-spacing:0.08em; margin:0; text-transform:uppercase;">📡 Vizyon Analizi</p>
+        <p style="color:#ffffff; font-size:0.85rem; margin:0.3rem 0; line-height:1.3;">{summary}</p>
+        <div style="display:flex; align-items:center; gap:12px; margin-top:0.4rem; flex-wrap:wrap;">
+            <span style="color:{color}; font-size:0.78rem; font-weight:700;">{icon} {ambition}</span>
+            <span style="color:rgba(255,255,255,0.6); font-size:0.75rem;">Gerilim: {stretch:.2f}</span>
+            <span style="color:rgba(255,255,255,0.6); font-size:0.75rem;">Risk: {risk}</span>
+        </div>
+        <div style="margin-top:0.4rem;">{theme_html}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ==============================================================================
+# 🔴 DEVIL'S ADVOCATE UYARI BİLEŞENİ
+# Akademik Çerçeve:
+#   - Schwenk (2020) Devil's Advocacy in Strategic Decision Making
+#   - EU AI Act 2024 Art. 14 — Human Oversight (insan denetimi) zorunluluğu
+#   - Proaktif UI uyarısı — Streamlit'in yukarıdan-aşağı execution modeliyle uyumlu.
+# ==============================================================================
+
+def render_devils_advocate_warning(da_result: dict):
+    """
+    Vizyon fizibilite uyarısını hedef setinin üzerinde proaktif olarak gösterir.
+
+    Akademik dayanak:
+    • Schwenk (2020) — Stratejik karar destek sistemlerinde çelişkisel
+      sorgulama mekanizması.
+    • EU AI Act 2024 Art. 14 — Yüksek riskli AI sistemlerinde insan
+      denetimi; otomasyon yanlılığını önleyen proaktif uyarı mekanizmaları.
+    """
+    if not da_result or not da_result.get("triggered"):
+        return
+
+    severity = da_result.get("severity", "info")
+    message = da_result.get("message", "")
+    note = da_result.get("calibration_note", "")
+
+    if severity == "error":
+        bg, border, icon = "#fef2f2", "#dc2626", "⚠️"
+        text_color = "#991b1b"
+    elif severity == "warning":
+        bg, border, icon = "#fffbeb", "#f59e0b", "🟡"
+        text_color = "#92400e"
+    else:
+        bg, border, icon = "#eff6ff", "#3b82f6", "ℹ️"
+        text_color = "#1e40af"
+
+    st.markdown(f"""
+    <div style="
+        background:{bg};
+        border-left: 4px solid {border};
+        border-radius: 8px;
+        padding: 0.85rem 1.1rem;
+        margin-bottom: 1rem;
+    ">
+        <p style="margin:0; font-weight:700; color:{text_color}; font-size:0.9rem;">
+            {icon} Devil's Advocate — Vizyon Fizibilite Denetimi
+        </p>
+        <p style="margin:0.3rem 0 0 0; color:{text_color}; font-size:0.83rem; line-height:1.5;">
+            {message}
+        </p>
+        {f'<p style="margin:0.2rem 0 0 0; color:{text_color}; font-size:0.78rem; font-style:italic;">{note}</p>' if note else ''}
+    </div>
+    """, unsafe_allow_html=True)
+
+
+# ==============================================================================
+# 🔗 VİZYON İZLENEBİLİRLİK PANELİ
+# Akademik Çerçeve:
+#   - ISO 56002:2019 — İnovasyon Yönetim Sistemi; stratejik hedeflerin
+#     organizasyonel yenilik süreçleriyle izlenebilir hizalanması.
+#   - NIST AI RMF 1.0 (2023) — GOVERN fonksiyonu; AI karar çıktılarının
+#     stratejik kaynaklarla denetlenebilir bağlantısı.
+# ==============================================================================
+
+def render_vision_traceability(goal_set: dict, decoded_vision: dict):
+    """
+    Hedef seti ile vizyon arasındaki izlenebilirlik zincirini görselleştirir.
+    Expander içinde gösterilir — bilişsel yük minimize edilir.
+
+    Akademik dayanak:
+    • ISO 56002:2019 — İnovasyon yönetim sistemi stratejik hizalanma modeli.
+    • NIST AI RMF 1.0 (2023) — GOVERN fonksiyonu; AI çıktılarının
+      kurumsal stratejiye izlenebilir bağlantısının sağlanması.
+    """
+    if not goal_set or not decoded_vision:
+        return
+    if "error" in goal_set:
+        return
+
+    goals = goal_set.get("goals", [])
+    if not goals:
+        return
+
+    has_alignment = any(g.get("vision_alignment_note") for g in goals)
+    if not has_alignment:
+        return
+
+    ambition = decoded_vision.get("ambition_level", "Dengeli")
+    summary = decoded_vision.get("vision_summary", "")
+    themes = decoded_vision.get("focus_themes", [])
+    top_theme = themes[0].get("theme", "—") if themes else "—"
+
+    ambition_colors = {"Agresif": "#dc2626", "Dengeli": "#16a34a", "Zayıf": "#f59e0b"}
+    color = ambition_colors.get(ambition, "#64748b")
+
+    with st.expander("🔗 Vizyon ↔ Hedef İzlenebilirlik Zinciri (ISO 56002 / NIST AI RMF)", expanded=False):
+        st.markdown(
+            f"<p style='font-size:0.8rem;color:#64748b;margin-bottom:0.5rem;'>"
+            f"Akademik dayanak: <em>ISO 56002:2019</em> İnovasyon Yönetim Sistemi · "
+            f"<em>NIST AI RMF 1.0 (2023)</em> İzlenebilirlik Çerçevesi</p>",
+            unsafe_allow_html=True
+        )
+
+        # Vizyon özeti
+        st.markdown(f"""
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;
+                    padding:0.6rem 1rem;margin-bottom:0.8rem;">
+            <span style="font-size:0.72rem;color:#94a3b8;font-weight:700;
+                         text-transform:uppercase;letter-spacing:0.06em;">Yönetici Vizyonu</span>
+            <p style="margin:0.2rem 0 0;font-size:0.87rem;color:#1e293b;">{summary}</p>
+            <span style="font-size:0.75rem;color:{color};font-weight:700;">
+                {ambition} · Baskın Tema: {top_theme}
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Her hedef için izlenebilirlik satırı
+        for i, g in enumerate(goals, 1):
+            note = g.get("vision_alignment_note", "")
+            title = g.get("title", f"Hedef {i}")
+            if not note:
+                continue
+            st.markdown(f"""
+            <div style="display:flex;align-items:flex-start;gap:10px;
+                        padding:0.5rem 0.75rem;border-left:3px solid {color};
+                        background:#fafafa;border-radius:0 6px 6px 0;margin-bottom:0.4rem;">
+                <span style="font-size:0.85rem;font-weight:700;color:{color};
+                             min-width:22px;">H{i}</span>
+                <div>
+                    <span style="font-size:0.82rem;font-weight:600;color:#1e293b;">{title}</span>
+                    <br/>
+                    <span style="font-size:0.78rem;color:#475569;font-style:italic;">
+                        🔗 {note}
+                    </span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
