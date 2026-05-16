@@ -932,7 +932,10 @@ class Analyzer:
         # Geçmiş mesajları metne dök
         history_text = ""
         for msg in history:
-            if isinstance(msg, tuple) and len(msg) == 2:
+            if isinstance(msg, dict):
+                role_label = "Kullanıcı" if msg.get("role") == "user" else "Asistan"
+                history_text += f"{role_label}: {msg.get('content')}\n\n"
+            elif isinstance(msg, tuple) and len(msg) == 2:
                 history_text += f"Kullanıcı: {msg[0]}\nAsistan: {msg[1]}\n\n"
 
         user_input = f"{history_text}Kullanıcı: {message}\nAsistan:"

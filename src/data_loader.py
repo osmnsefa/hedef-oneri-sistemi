@@ -1,8 +1,10 @@
 import pandas as pd
 import logging
+import uuid
 from sqlalchemy.orm import Session
+import streamlit as st
 from src.auth import get_db_session
-from src.models import Employee, PerformanceHistory
+from src.models import Employee, PerformanceHistory, ChatHistory, ChatSession
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +12,9 @@ class DataLoader:
     def __init__(self):
         pass
         
-    def get_dropdown_options(self):
+    @staticmethod
+    @st.cache_data(ttl=3600)
+    def get_dropdown_options():
         """SQL'den benzersiz Çalışan isimlerini ve Hedef Türlerini çeker."""
         session = get_db_session()
         try:
@@ -101,6 +105,110 @@ class DataLoader:
             return docs
         except Exception as e:
             logger.error(f"SQL verileri RAG için çekilemedi: {e}")
+            return []
+        finally:
+            session.close()
+
+    def create_chat_session(self, user_sicil, employee_sicil, target_type, title):
+        """Yeni bir sohbet oturumu oluşturur ve ID'sini döner."""
+        session = get_db_session()
+        try:
+            session_id = str(uuid.uuid4())
+            new_session = ChatSession(
+                id=session_id,
+                user_sicil=user_sicil,
+                employee_sicil=employee_sicil,
+                target_type=target_type,
+                title=title
+            )
+            session.add(new_session)
+            session.commit()
+            return session_id
+        except Exception as e:
+            logger.error(f"Sohbet oturumu oluşturulurken hata: {e}")
+            session.rollback()
+            return None
+        finally:
+            session.close()
+
+    def get_chat_sessions(self, user_sicil, employee_sicil, target_type):
+        """Seçili bağlamdaki geçmiş sohbet oturumlarını liste olarak döner."""
+        session = get_db_session()
+        try:
+            records = session.query(ChatSession).filter(
+                ChatSession.user_sicil == user_sicil,
+                ChatSession.employee_sicil == employee_sicil,
+                ChatSession.target_type == target_type
+            ).order_by(ChatSession.updated_at.desc()).all()
+            
+            sessions = []
+            for r in records:
+                sessions.append({
+                    "id": r.id,
+                    "title": r.title,
+                    "updated_at": r.updated_at
+                })
+            return sessions
+        except Exception as e:
+            logger.error(f"Sohbet oturumları çekilirken hata: {e}")
+            return []
+        finally:
+            session.close()
+
+    def save_chat_message(self, user_sicil, employee_sicil, target_type, role, content, session_id=None):
+        """Yeni sohbet mesajını veritabanına kaydeder."""
+        session = get_db_session()
+        try:
+            msg = ChatHistory(
+                session_id=session_id,
+                user_sicil=user_sicil,
+                employee_sicil=employee_sicil,
+                target_type=target_type,
+                role=role,
+                content=content
+            )
+            session.add(msg)
+            
+            # Oturumun güncellenme tarihini de yenile
+            if session_id:
+                chat_session = session.query(ChatSession).filter_by(id=session_id).first()
+                if chat_session:
+                    import datetime
+                    chat_session.updated_at = datetime.datetime.now()
+            
+            session.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Sohbet mesajı kaydedilirken hata: {e}")
+            session.rollback()
+            return False
+        finally:
+            session.close()
+
+    def get_chat_history(self, session_id, limit=50):
+        """Spesifik bir oturumdaki mesajları kronolojik sırada döner."""
+        if not session_id:
+            return []
+            
+        session = get_db_session()
+        try:
+            records = session.query(ChatHistory).filter(
+                ChatHistory.session_id == session_id
+            ).order_by(ChatHistory.created_at.desc()).limit(limit).all()
+            
+            # Kronolojik sıralama için (eskiden yeniye)
+            records = reversed(records)
+            
+            history = []
+            for r in records:
+                history.append({
+                    "role": r.role,
+                    "content": r.content,
+                    "timestamp": r.created_at
+                })
+            return history
+        except Exception as e:
+            logger.error(f"Sohbet geçmişi çekilirken hata: {e}")
             return []
         finally:
             session.close()

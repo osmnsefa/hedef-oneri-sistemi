@@ -1,5 +1,6 @@
-from sqlalchemy import Column, Integer, String, Float, Date, ForeignKey, Text, Boolean, DateTime
+from sqlalchemy import Column, Integer, String, Float, Date, ForeignKey, Text, Boolean, DateTime, JSON
 from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy.sql import func
 
 Base = declarative_base()
 
@@ -66,6 +67,15 @@ class AnnualGoals(Base):
     is_locked = Column(Boolean, default=False)
     locked_by_sicil = Column(String, nullable=True)
     version_no = Column(Integer, default=1)
+    
+    # Çalışan Geri Bildirim ve Revizyon Döngüsü
+    employee_note = Column(Text, nullable=True)
+    approval_status = Column(String, default='Locked') # Locked, Feedback_Received, Passive
+    parent_goal_id = Column(Integer, ForeignKey('annual_goals.id'), nullable=True)
+    
+    # Admin-Yönetici Stratejik Denetim ve Kayıtlı İletişim Hattı
+    admin_approval_status = Column(String, default='Onay Bekliyor') # Onay Bekliyor, Revizyon Bekliyor, Onaylandı
+    denetim_loglari = Column(JSON, nullable=True, default=list) # [{role, content, timestamp}]
     
     # Yönetici Davranış Analizi (Telemetri)
     ai_status = Column(String, default="Kabul") # Kabul, Revize, Manuel
@@ -146,3 +156,37 @@ class EmployeeFeedback(Base):
 
     # İlişkiler
     employee = relationship('Employee', back_populates='feedbacks')
+
+class ChatSession(Base):
+    """
+    Sohbet oturumlarını temsil eden tablo. Her yeni konu/başlangıç bir oturumdur.
+    """
+    __tablename__ = 'chat_sessions'
+
+    id = Column(String, primary_key=True) # UUID olarak saklanacak
+    user_sicil = Column(String, ForeignKey('users.sicil_no'), nullable=False)
+    employee_sicil = Column(String, ForeignKey('employees.user_sicil'), nullable=False)
+    target_type = Column(String, nullable=False)
+    title = Column(String, nullable=False)
+    created_at = Column(DateTime, default=func.now())
+    updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
+
+class ChatHistory(Base):
+    """
+    Sisteme entegre edilen Asistan ile Yönetici/Kullanıcı arasındaki kalıcı sohbet geçmişini tutar.
+    """
+    __tablename__ = 'chat_history'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String, ForeignKey('chat_sessions.id'), nullable=True)
+    user_sicil = Column(String, ForeignKey('users.sicil_no'), nullable=False)
+    employee_sicil = Column(String, ForeignKey('employees.user_sicil'), nullable=False)
+    target_type = Column(String, nullable=False)
+    role = Column(String, nullable=False) # 'user' veya 'bot'
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=func.now())
+
+    # İlişkiler
+    session = relationship('ChatSession', backref='messages')
+    user = relationship('User')
+    employee = relationship('Employee')

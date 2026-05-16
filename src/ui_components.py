@@ -100,6 +100,14 @@ def load_custom_css():
             max-width: 90%;
         }
 
+        .chat-timestamp {
+            font-size: 0.7rem;
+            opacity: 0.6;
+            text-align: right;
+            margin-top: 8px;
+            font-weight: 500;
+        }
+
         /* Tabs Tasarımı */
         .stTabs [data-baseweb="tab-list"] {
             gap: 8px;
@@ -203,11 +211,19 @@ def render_header(employee_name="", target_type="", metadata=None):
                 st.metric(label=labels.get(key, key), value=str(val) if val else "—")
 
 
-def display_chat_message(role, message):
+def display_chat_message(role, message, timestamp=None):
+    time_html = ""
+    if timestamp:
+        if hasattr(timestamp, 'strftime'):
+            time_str = timestamp.strftime('%d.%m.%Y %H:%M')
+        else:
+            time_str = str(timestamp)[:16]
+        time_html = f'<div class="chat-timestamp">{time_str}</div>'
+
     if role == "user":
-        st.markdown(f'<div class="user-message">👤 <b>Siz:</b><br>{message}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="user-message">👤 <b>Siz:</b><br>{message}{time_html}</div>', unsafe_allow_html=True)
     else:
-        st.markdown(f'<div class="bot-message">🤖 <b>Asistan:</b><br>{message}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="bot-message">🤖 <b>Asistan:</b><br>{message}{time_html}</div>', unsafe_allow_html=True)
 
 def render_dss_metrics(metrics, employee_name=""):
     """Karar Destek Sistemi (DSS) metriklerini görselleştirir."""

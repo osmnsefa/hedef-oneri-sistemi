@@ -5,6 +5,12 @@ from src.config import Config
 
 logger = logging.getLogger(__name__)
 
+import streamlit as st
+
+@st.cache_resource
+def _get_groq_client(api_key):
+    return Groq(api_key=api_key)
+
 class LLMClient:
     def __init__(self):
         api_key = Config.GROQ_API_KEY
@@ -12,7 +18,7 @@ class LLMClient:
             logger.error("GROQ_API_KEY bulunamadı! Lütfen .env dosyasını kontrol edin.")
             self.client = None
         else:
-            self.client = Groq(api_key=api_key)
+            self.client = _get_groq_client(api_key)
         
     def generate_response(self, system_prompt, user_prompt, temperature=0.7, json_mode=False):
         if not self.client:

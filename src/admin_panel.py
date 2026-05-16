@@ -17,11 +17,18 @@ from src.models import User, Employee, PerformanceHistory
 # ---------------------------------------------------------------------------
 # Yardımcı: Tüm PH verisini DataFrame'e çevir
 # ---------------------------------------------------------------------------
-def _load_all_ph() -> pd.DataFrame:
+@st.cache_data(ttl=600)
+def _load_all_ph(dept=None, emp_sicil=None) -> pd.DataFrame:
     session = get_db_session()
     try:
         allowed = st.session_state.get('allowed_employees', [])
-        rows = session.query(PerformanceHistory).filter(PerformanceHistory.sicil_no.in_(allowed)).all()
+        query = session.query(PerformanceHistory).filter(PerformanceHistory.sicil_no.in_(allowed))
+        if dept:
+            query = query.filter(PerformanceHistory.bolum == dept)
+        if emp_sicil:
+            query = query.filter(PerformanceHistory.sicil_no == emp_sicil)
+            
+        rows = query.limit(2000).all()
         data = []
         for r in rows:
             data.append({
@@ -40,14 +47,22 @@ def _load_all_ph() -> pd.DataFrame:
     finally:
         session.close()
 
-def _load_locked_goals() -> pd.DataFrame:
+@st.cache_data(ttl=600)
+def _load_locked_goals(dept=None, emp_sicil=None) -> pd.DataFrame:
     session = get_db_session()
     try:
         from src.models import AnnualGoals, Employee
         allowed = st.session_state.get('allowed_employees', [])
-        rows = session.query(AnnualGoals, Employee).join(Employee, AnnualGoals.employee_sicil == Employee.user_sicil)\
+        query = session.query(AnnualGoals, Employee).join(Employee, AnnualGoals.employee_sicil == Employee.user_sicil)\
             .filter(AnnualGoals.is_locked == True)\
-            .filter(AnnualGoals.employee_sicil.in_(allowed)).all()
+            .filter(AnnualGoals.employee_sicil.in_(allowed))
+            
+        if dept:
+            query = query.filter(Employee.department == dept)
+        if emp_sicil:
+            query = query.filter(Employee.user_sicil == emp_sicil)
+            
+        rows = query.limit(2000).all()
         data = []
         for g, emp in rows:
             data.append({
@@ -71,293 +86,7 @@ def _load_locked_goals() -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # YARDIMCI: PDF OLUŞTURUCU BUTON HTML/JS
 # ---------------------------------------------------------------------------
-def _generate_four_card_pdf_ui(df_all, df_locked):
-    import datetime
-    
-    # CSS Styles
-    css = """
-    <style>
-        body { font-family: 'Inter', sans-serif; color: #1e293b; }
-        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; }
-        .card h3 { margin-top: 10px; margin-bottom: 8px; font-size: 18px; color: #2563eb; }
-        .card p { color: #64748b; font-size: 14px; margin-bottom: 16px; }
-        .card select { width: 100%; padding: 8px; margin-bottom: 16px; border: 1px solid #cbd5e1; border-radius: 4px; font-family: 'Inter', sans-serif; }
-        .card button { width: 100%; background: #2563eb; color: white; border: none; padding: 10px; border-radius: 6px; cursor: pointer; font-weight: 600; font-family: 'Inter', sans-serif; }
-        .card button:hover { background: #1d4ed8; }
-        
-        .pdf-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-top: 16px; margin-bottom: 24px; }
-        .pdf-table th { background: #2563eb; color: #ffffff; padding: 6px 10px; text-align: left; font-size: 11px; font-weight: 600; }
-        .pdf-table td { padding: 6px 10px; border-bottom: 1px solid #e2e8f0; color: #1e293b; }
-        .pdf-table tr:nth-child(even) { background: #f8fafc; }
-        
-        .pdf-header { border-bottom: 3px solid #2563eb; padding-bottom: 20px; margin-bottom: 32px; display: flex; justify-content: space-between; align-items: flex-end; }
-        .pdf-header-title { font-size: 24px; font-weight: 700; color: #1e293b; margin: 0; }
-        .pdf-header-sub { font-size: 11px; color: #64748b; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; }
-        .pdf-badge { margin-top: 4px; background: #eff6ff; color: #2563eb; padding: 4px 12px; border-radius: 20px; font-size: 12px; display: inline-block; }
-        
-        .pdf-footer { border-top: 1px solid #e2e8f0; margin-top: 40px; padding-top: 16px; display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; }
-    </style>
-    """
-
-    js = """
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <script>
-        async function generatePDF(elementId, filename) {
-            const element = document.getElementById(elementId);
-            if (!element) return;
-
-            element.style.position = 'fixed';
-            element.style.top = '0';
-            element.style.left = '0';
-            element.style.zIndex = '9999';
-            element.style.display = 'block';
-
-            await new Promise(resolve => setTimeout(resolve, 500));
-
-            try {
-                const canvas = await html2canvas(element, {
-                    scale: 2, useCORS: true, allowTaint: true, backgroundColor: '#ffffff', width: 1300, windowWidth: 1300
-                });
-
-                const imgData = canvas.toDataURL('image/png');
-                const { jsPDF } = window.jspdf;
-                const pdf = new jsPDF({ orientation: 'portrait', unit: 'px', format: 'a4', hotfixes: ['px_scaling'] });
-
-                const pageWidth = pdf.internal.pageSize.getWidth();
-                const pageHeight = pdf.internal.pageSize.getHeight();
-                const imgWidth = pageWidth;
-                const imgHeight = (canvas.height * pageWidth) / canvas.width;
-
-                let heightLeft = imgHeight;
-                let position = 0;
-
-                pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-                heightLeft -= pageHeight;
-
-                while (heightLeft > 0) {
-                    position = heightLeft - imgHeight;
-                    pdf.addPage();
-                    pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-                    heightLeft -= pageHeight;
-                }
-
-                const date = new Date().toISOString().split('T')[0];
-                pdf.save(`${filename}-${date}.pdf`);
-
-            } finally {
-                element.style.display = 'none';
-                element.style.position = 'absolute';
-                element.style.zIndex = '-1';
-            }
-        }
-        
-        function updateDept() {
-            const val = document.getElementById('dept-select').value;
-            document.querySelectorAll('.dept-section').forEach(el => el.style.display = 'none');
-            const target = document.getElementById('dept-' + val);
-            if(target) target.style.display = 'block';
-        }
-
-        function updateEmp() {
-            const val = document.getElementById('emp-select').value;
-            document.querySelectorAll('.emp-section').forEach(el => el.style.display = 'none');
-            const target = document.getElementById('emp-' + val);
-            if(target) target.style.display = 'block';
-        }
-    </script>
-    """
-
-    def render_header(title, subtitle=""):
-        date_str = datetime.datetime.now().strftime("%d.%m.%Y")
-        return f"""
-        <div class="pdf-header">
-            <div>
-                <div class="pdf-header-sub">Stratejik Performans Yönetim Sistemi</div>
-                <h1 class="pdf-header-title">{title}</h1>
-                <div style="font-size: 14px; color: #64748b; margin-top: 4px;">{subtitle}</div>
-            </div>
-            <div style="text-align: right; font-size: 13px; color: #64748b;">
-                <div>Rapor Tarihi: {date_str}</div>
-                <div class="pdf-badge">GİZLİ</div>
-            </div>
-        </div>
-        """
-
-    def render_footer():
-        now_str = datetime.datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-        return f"""
-        <div class="pdf-footer">
-            <span>Stratejik PMS — Kurumsal Rapor</span>
-            <span>Bu rapor sistem tarafından otomatik oluşturulmuştur.</span>
-            <span>{now_str}</span>
-        </div>
-        """
-
-    def normalize(s):
-        if pd.isna(s): return ''
-        return ' '.join(str(s).strip().lower().split())
-
-    if not df_all.empty:
-        df_all['norm_status'] = df_all['Sonuç'].apply(normalize)
-        beklenen = len(df_all[df_all['norm_status'] == 'beklenen'])
-        ustunde = len(df_all[df_all['norm_status'] == 'beklenenin üstünde'])
-        altinda = len(df_all[df_all['norm_status'] == 'beklenenin altında'])
-    else:
-        beklenen = ustunde = altinda = 0
-
-    total_goals = len(df_all) + len(df_locked)
-    total_emps = len(set(df_all['Sicil'].tolist() + df_locked['Sicil'].tolist())) if not (df_all.empty and df_locked.empty) else 0
-
-    # REPORT 1: Sirket Geneli
-    r1_html = f"""
-    <div id="pdf-sirket-geneli" style="display:none; padding:40px; background:white; width:1300px; color:#1e293b;">
-        {render_header("Şirket Geneli Performans Raporu", "Tüm Departmanlar ve Çalışanlar Özeti")}
-        <h3>KPI Özeti</h3>
-        <table class="pdf-table">
-            <tr><th>Toplam Çalışan</th><th>Toplam Hedef (Geçmiş + Yeni)</th><th>Beklenen (Geçmiş)</th><th>Beklenenin Üstünde</th><th>Beklenenin Altında</th></tr>
-            <tr><td>{total_emps}</td><td>{total_goals}</td><td>{beklenen}</td><td>{ustunde}</td><td>{altinda}</td></tr>
-        </table>
-        <h3>Geçmiş Performans Verileri</h3>
-        {df_all.drop(columns=['norm_status']).to_html(index=False, classes='pdf-table', border=0) if not df_all.empty else '<p>Veri yok.</p>'}
-        <h3>Yeni Kesinleşmiş (Kilitli) Hedefler</h3>
-        {df_locked.to_html(index=False, classes='pdf-table', border=0) if not df_locked.empty else '<p>Veri yok.</p>'}
-        {render_footer()}
-    </div>
-    """
-
-    # REPORT 2: Departman
-    dept_options = ""
-    dept_sections = ""
-    departments = sorted(list(set(df_all['Bölüm'].dropna().unique().tolist() + df_locked['Bölüm'].dropna().unique().tolist()))) if not (df_all.empty and df_locked.empty) else []
-    
-    for i, dept in enumerate(departments):
-        dept_options += f'<option value="{i}">{dept}</option>'
-        d_all = df_all[df_all['Bölüm'] == dept] if not df_all.empty else df_all
-        d_lock = df_locked[df_locked['Bölüm'] == dept] if not df_locked.empty else df_locked
-        dept_emps = len(set(d_all['Sicil'].tolist() + d_lock['Sicil'].tolist()))
-        dept_goals = len(d_all) + len(d_lock)
-        
-        display_style = "block" if i == 0 else "none"
-        dept_sections += f"""
-        <div id="dept-{i}" class="dept-section" style="display:{display_style}; padding:40px; background:white; width:1300px; color:#1e293b;">
-            {render_header(f"{dept} Departman Raporu", f"Çalışan sayısı: {dept_emps} | Toplam hedef: {dept_goals}")}
-            <h3>Geçmiş Performans Verileri</h3>
-            {d_all.drop(columns=['norm_status']).to_html(index=False, classes='pdf-table', border=0) if not d_all.empty else '<p>Veri yok.</p>'}
-            <h3>Yeni Kesinleşmiş (Kilitli) Hedefler</h3>
-            {d_lock.to_html(index=False, classes='pdf-table', border=0) if not d_lock.empty else '<p>Veri yok.</p>'}
-            {render_footer()}
-        </div>
-        """
-
-    r2_html = f"""<div id="pdf-departman" style="display:none;">{dept_sections}</div>"""
-
-    # REPORT 3: Çalışan
-    emp_options = ""
-    emp_sections = ""
-    if not (df_all.empty and df_locked.empty):
-        all_emps_df = pd.concat([df_all[['Sicil', 'İsim', 'Bölüm', 'Unvan']] if not df_all.empty else pd.DataFrame(columns=['Sicil', 'İsim', 'Bölüm', 'Unvan']), 
-                                 df_locked[['Sicil', 'İsim', 'Bölüm']] if not df_locked.empty else pd.DataFrame(columns=['Sicil', 'İsim', 'Bölüm'])]).drop_duplicates(subset=['Sicil']).sort_values('İsim')
-    else:
-        all_emps_df = pd.DataFrame()
-        
-    for i, row in all_emps_df.iterrows():
-        sicil = row['Sicil']
-        isim = row['İsim']
-        emp_options += f'<option value="{sicil}">{isim}</option>'
-        
-        e_all = df_all[df_all['Sicil'] == sicil] if not df_all.empty else df_all
-        e_lock = df_locked[df_locked['Sicil'] == sicil] if not df_locked.empty else df_locked
-        e_unvan = row.get('Unvan', '')
-        if pd.isna(e_unvan): e_unvan = ''
-        e_dept = row.get('Bölüm', '')
-        
-        display_style = "block" if i == 0 else "none"
-        emp_sections += f"""
-        <div id="emp-{sicil}" class="emp-section" style="display:{display_style}; padding:40px; background:white; width:1300px; color:#1e293b;">
-            {render_header(f"{isim} - Performans Raporu", f"Unvan: {e_unvan} | Departman: {e_dept} | Sicil: {sicil}")}
-            <h3>Geçmiş Performans Verileri</h3>
-            {e_all.drop(columns=['norm_status']).to_html(index=False, classes='pdf-table', border=0) if not e_all.empty else '<p>Veri yok.</p>'}
-            <h3>Yeni Kesinleşmiş (Kilitli) Hedefler</h3>
-            {e_lock.to_html(index=False, classes='pdf-table', border=0) if not e_lock.empty else '<p>Veri yok.</p>'}
-            {render_footer()}
-        </div>
-        """
-
-    r3_html = f"""<div id="pdf-calisan" style="display:none;">{emp_sections}</div>"""
-
-    # REPORT 4: Genel Performans
-    r4_html = f"""
-    <div id="pdf-performans" style="display:none; padding:40px; background:white; width:1300px; color:#1e293b;">
-        {render_header("Genel Performans Raporu", "Tüm Çalışanların Performans Özeti")}
-        <table class="pdf-table">
-            <tr><th>Sicil</th><th>Ad Soyad</th><th>Departman</th><th>Toplam Geçmiş Hedef</th><th>Beklenen</th><th>Üstünde</th><th>Altında</th><th>Yeni Hedef Sayısı</th></tr>
-    """
-    for _, row in all_emps_df.iterrows():
-        sicil = row['Sicil']
-        e_all = df_all[df_all['Sicil'] == sicil] if not df_all.empty else df_all
-        e_lock = df_locked[df_locked['Sicil'] == sicil] if not df_locked.empty else df_locked
-        e_bek = len(e_all[e_all['norm_status'] == 'beklenen']) if not e_all.empty else 0
-        e_ust = len(e_all[e_all['norm_status'] == 'beklenenin üstünde']) if not e_all.empty else 0
-        e_alt = len(e_all[e_all['norm_status'] == 'beklenenin altında']) if not e_all.empty else 0
-        r4_html += f"<tr><td>{sicil}</td><td>{row['İsim']}</td><td>{row['Bölüm']}</td><td>{len(e_all)}</td><td>{e_bek}</td><td>{e_ust}</td><td>{e_alt}</td><td>{len(e_lock)}</td></tr>"
-    r4_html += f"</table>{render_footer()}</div>"
-
-    # UI Layout
-    ui_html = f"""
-    <div style="background: white; border-radius: 8px;">
-        <p style="color: #64748b; margin-bottom: 24px; font-family:'Inter',sans-serif; font-size:14px;">Aşağıdaki kartlardan filtrelerinizi seçerek PDF raporları üretebilirsiniz. Tüm veriler canlı SQL kayıtlarından beslenmektedir.</p>
-        
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 24px; font-family:'Inter',sans-serif;">
-            <div class="card">
-                <div style="font-size:24px; margin-bottom:8px;">📊</div>
-                <h3>Şirket Geneli Raporu</h3>
-                <p>Tüm departmanlar, tüm geçmiş performans ve kilitli yeni hedefler.</p>
-                <button onclick="generatePDF('pdf-sirket-geneli', 'sirket-geneli-raporu')">📥 PDF İndir</button>
-            </div>
-            
-            <div class="card">
-                <div style="font-size:24px; margin-bottom:8px;">🏬</div>
-                <h3>Departman Raporu</h3>
-                <select id="dept-select" onchange="updateDept()">{dept_options}</select>
-                <button onclick="generatePDF('pdf-departman', 'departman-raporu')">📥 PDF İndir</button>
-            </div>
-
-            <div class="card">
-                <div style="font-size:24px; margin-bottom:8px;">👤</div>
-                <h3>Çalışan Raporu</h3>
-                <select id="emp-select" onchange="updateEmp()">{emp_options}</select>
-                <button onclick="generatePDF('pdf-calisan', 'calisan-raporu')">📥 PDF İndir</button>
-            </div>
-
-            <div class="card">
-                <div style="font-size:24px; margin-bottom:8px;">📈</div>
-                <h3>Genel Performans Raporu</h3>
-                <p>Tüm çalışanların tek tablo üzerinde özet performansı.</p>
-                <button onclick="generatePDF('pdf-performans', 'genel-performans-raporu')">📥 PDF İndir</button>
-            </div>
-        </div>
-    </div>
-    """
-
-    return f"""
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-        {css}
-        {js}
-    </head>
-    <body>
-        {ui_html}
-        {r1_html}
-        {r2_html}
-        {r3_html}
-        {r4_html}
-        <script>updateDept(); updateEmp();</script>
-    </body>
-    </html>
-    """
+# PDF Generator artık src.pdf_generator üzerinden çağrılıyor.
 
 
 # ---------------------------------------------------------------------------
@@ -396,11 +125,13 @@ def render_admin_dashboard():
         df_all = _load_all_ph()
         df_locked = _load_locked_goals()
 
-    tab_overview, tab_rep, tab_beh, tab_users = st.tabs([
+    tab_overview, tab_rep, tab_beh, tab_users, tab_feedback, tab_audit = st.tabs([
         "📊 Genel Bakış",
         "📋 Kurumsal Raporlar",
         "🧠 Yönetici Davranış Analizi",
         "👤 Kullanıcı Yönetimi",
+        "💬 Çalışan İtirazları",
+        "🛡️ Stratejik Onay ve Denetim",
     ])
 
     # ==========================================================================
@@ -484,13 +215,61 @@ def render_admin_dashboard():
     # ==========================================================================
     with tab_rep:
         st.subheader("📋 Kurumsal Raporlar")
+        st.markdown("Veritabanından canlı (Lazy Load) filtrelenmiş PDF raporları oluşturun.")
 
         if df_all.empty and df_locked.empty:
             st.info("Veritabanında henüz performans kaydı veya kilitli hedef yok.")
             return
 
         import streamlit.components.v1 as components
-        components.html(_generate_four_card_pdf_ui(df_all, df_locked), height=550, scrolling=True)
+        from src.pdf_generator import generate_report_html
+        
+        report_type = st.selectbox("Rapor Türü Seçiniz", ["Şirket Geneli", "Departman", "Çalışan", "Genel Performans"])
+        
+        # Filtre Seçenekleri
+        departments = sorted(list(set(df_all['Bölüm'].dropna().unique().tolist() + df_locked['Bölüm'].dropna().unique().tolist())))
+        all_emps_df = pd.concat([
+            df_all[['Sicil', 'İsim']] if not df_all.empty else pd.DataFrame(columns=['Sicil', 'İsim']), 
+            df_locked[['Sicil', 'İsim']] if not df_locked.empty else pd.DataFrame(columns=['Sicil', 'İsim'])
+        ]).drop_duplicates(subset=['Sicil']).sort_values('İsim')
+        
+        selected_dept = None
+        selected_emp_sicil = None
+        selected_emp_name = None
+        
+        if report_type == "Departman":
+            selected_dept = st.selectbox("Departman Seçiniz", departments)
+        elif report_type == "Çalışan":
+            emp_dict = {row['Sicil']: row['İsim'] for _, row in all_emps_df.iterrows()}
+            selected_emp_sicil = st.selectbox("Çalışan Seçiniz", list(emp_dict.keys()), format_func=lambda x: emp_dict[x])
+            selected_emp_name = emp_dict.get(selected_emp_sicil, "")
+            
+        if st.button("📄 Raporu Hazırla & İndir"):
+            with st.spinner("Raporunuz veritabanından çekiliyor..."):
+                # Lazy Loading: Sadece gerekli veriyi SQL'den çek
+                df_all_lazy = _load_all_ph(dept=selected_dept, emp_sicil=selected_emp_sicil)
+                df_locked_lazy = _load_locked_goals(dept=selected_dept, emp_sicil=selected_emp_sicil)
+                
+                if report_type == "Şirket Geneli" or report_type == "Genel Performans":
+                    title = "Şirket Geneli Performans Raporu"
+                    sub = "Tüm Departmanlar ve Çalışanlar Özeti"
+                elif report_type == "Departman":
+                    title = f"{selected_dept} Departman Raporu"
+                    sub = f"Departman Bazlı Performans Özeti"
+                elif report_type == "Çalışan":
+                    title = f"{selected_emp_name} Raporu"
+                    sub = f"Çalışan Özel Performans Özeti"
+                    
+                html_code = generate_report_html(
+                    report_type="dinamik", 
+                    df_all=df_all_lazy, 
+                    df_locked=df_locked_lazy, 
+                    report_title=title, 
+                    report_subtitle=sub
+                )
+                
+                # HTML Container üzerinden PDF indirmeyi tetikler
+                components.html(html_code, height=600, scrolling=True)
 
     # ==========================================================================
     # SEKME 2 — YÖNETİCİ DAVRANIŞ ANALİZİ
@@ -618,7 +397,203 @@ def render_admin_dashboard():
             session.close()
 
     # ==========================================================================
-    # SEKME 3 — KULLANICI YÖNETİMİ
+    # SEKME 4 — ÇALIŞAN İTİRAZLARI (GERİ BİLDİRİMLER)
+    # ==========================================================================
+    with tab_feedback:
+        st.subheader("💬 Bekleyen Çalışan İtirazları")
+        
+        session = get_db_session()
+        try:
+            from src.models import AnnualGoals, Employee
+            feedbacks = session.query(AnnualGoals, Employee).join(Employee, AnnualGoals.employee_sicil == Employee.user_sicil).filter(
+                AnnualGoals.approval_status == 'Feedback_Received'
+            ).all()
+            
+            if not feedbacks:
+                st.success("🎉 Bekleyen herhangi bir çalışan itirazı bulunmuyor.")
+            else:
+                st.info(f"Toplam {len(feedbacks)} adet incelenmeyi bekleyen itiraz var.")
+                
+                # Çalışan Filtresi
+                unique_emps = sorted(list(set([f"{emp.first_name} {emp.last_name}" for g, emp in feedbacks])))
+                selected_emp = st.selectbox("Çalışan Filtrele (İtirazlar)", ["Tümü"] + unique_emps)
+                
+                from collections import defaultdict
+                grouped_feedbacks = defaultdict(list)
+                for g, emp in feedbacks:
+                    emp_name = f"{emp.first_name} {emp.last_name}"
+                    if selected_emp != "Tümü" and emp_name != selected_emp:
+                        continue
+                    grouped_feedbacks[g.yil].append((g, emp))
+                    
+                if not grouped_feedbacks:
+                    st.info("Seçili çalışana ait bekleyen itiraz bulunmuyor.")
+                    
+                for yil in sorted(grouped_feedbacks.keys(), reverse=True):
+                    with st.expander(f"📅 {yil} Yılı İtirazları ({len(grouped_feedbacks[yil])} adet)", expanded=True):
+                        for g, emp in grouped_feedbacks[yil]:
+                            st.markdown(f"**Çalışan:** {emp.first_name} {emp.last_name} | **Hedef Türü:** {g.hedef_turu}")
+                            st.markdown(f"**SMART Hedef:** {g.smart_hedef}")
+                            st.warning(f"💬 **Çalışan Notu:** {g.employee_note}")
+                            st.caption(f"Kilitliyen: {g.locked_by_sicil}")
+                            st.markdown("---")
+        finally:
+            session.close()
+
+    # ==========================================================================
+    # SEKME 5 — STRATEJİK ONAY VE DENETİM MASASI
+    # ==========================================================================
+    with tab_audit:
+        st.subheader("🛡️ Stratejik Onay ve Denetim Masası")
+        st.markdown("Yöneticiler tarafından kesinleştirilmiş hedefleri denetleyin, revizyon isteyin veya onaylayın.")
+        
+        session = get_db_session()
+        try:
+            from src.models import AnnualGoals, Employee
+            import datetime
+            import json
+            
+            # Kilitli (kesinleşmiş) hedefleri getir (sadece aktif olanlar)
+            locked_goals = session.query(AnnualGoals, Employee).join(Employee, AnnualGoals.employee_sicil == Employee.user_sicil).filter(
+                AnnualGoals.is_locked == True,
+                AnnualGoals.approval_status != 'Passive'
+            ).order_by(AnnualGoals.yil.desc(), AnnualGoals.admin_approval_status).all()
+            
+            if not locked_goals:
+                st.info("Sistemde kesinleştirilmiş herhangi bir hedef bulunmuyor.")
+            else:
+                # Çalışan Filtresi
+                unique_audit_emps = sorted(list(set([f"{emp.first_name} {emp.last_name}" for g, emp in locked_goals])))
+                selected_audit_emp = st.selectbox("Çalışan Filtrele (Denetim)", ["Tümü"] + unique_audit_emps)
+                
+                filtered_goals = []
+                for g, emp in locked_goals:
+                    emp_name = f"{emp.first_name} {emp.last_name}"
+                    if selected_audit_emp != "Tümü" and emp_name != selected_audit_emp:
+                        continue
+                    filtered_goals.append((g, emp))
+                
+                if not filtered_goals:
+                    st.info("Seçili çalışana ait hedef bulunmuyor.")
+                else:
+                    def has_chat_history(g):
+                        logs = getattr(g, 'denetim_loglari', [])
+                        if isinstance(logs, str):
+                            try: logs = json.loads(logs)
+                            except: logs = []
+                        return bool(logs)
+
+                    onaylananlar = [(g, emp) for g, emp in filtered_goals if g.admin_approval_status == 'Onaylandı']
+                    onay_bekleyenler = [(g, emp) for g, emp in filtered_goals if g.admin_approval_status != 'Onaylandı' and not has_chat_history(g)]
+                    sohbet_edilenler = [(g, emp) for g, emp in filtered_goals if g.admin_approval_status != 'Onaylandı' and has_chat_history(g)]
+                    
+                    tab_onay_bekleyen, tab_sohbet, tab_onay = st.tabs([
+                        f"Onay Bekleyenler ({len(onay_bekleyenler)})", 
+                        f"Revizyon Bekleyenler ({len(sohbet_edilenler)})", 
+                        f"Onaylanan Hedefler ({len(onaylananlar)})"
+                    ])
+                    
+                    def render_audit_goal(g, emp, is_approved):
+                        status_color = "green" if g.admin_approval_status == 'Onaylandı' else "orange" if g.admin_approval_status == 'Revizyon Bekliyor' else "blue"
+                        with st.expander(f"📌 {emp.first_name} {emp.last_name} | {g.hedef_turu} | Durum: {g.admin_approval_status}"):
+                            st.markdown(f"**Atayan Yönetici Sicili:** `{g.locked_by_sicil}`")
+                            st.markdown(f"**SMART Hedef:** {g.smart_hedef}")
+                            st.markdown(f"**Hedef Değeri:** {g.hedef_degeri} {g.birim}")
+                            
+                            st.markdown("---")
+                            st.markdown("##### 📜 İletişim Geçmişi (Audit Trail)")
+                            
+                            logs = g.denetim_loglari
+                            if isinstance(logs, str):
+                                try:
+                                    logs = json.loads(logs)
+                                except:
+                                    logs = []
+                            if not logs:
+                                logs = []
+                                
+                            if not logs:
+                                st.caption("Henüz bir iletişim kaydı yok.")
+                            else:
+                                for log in logs:
+                                    role_icon = "🛡️ Admin" if log.get('role') == 'Admin' else "👔 Yönetici"
+                                    ts = log.get('timestamp', '')
+                                    if ts:
+                                        try:
+                                            ts = ts.split('.')[0]
+                                        except:
+                                            pass
+                                    st.markdown(f"**{role_icon}** 🕒 `{ts}`\n> {log.get('content')}")
+                                    
+                            st.markdown("---")
+                            
+                            if not is_approved:
+                                # Aksiyonlar
+                                with st.form(f"audit_form_{g.id}"):
+                                    new_msg = st.text_area("Yöneticiye Mesaj / Revizyon Notu (Opsiyonel)", key=f"msg_{g.id}")
+                                    
+                                    c1, c2 = st.columns(2)
+                                    with c1:
+                                        btn_approve = st.form_submit_button("✅ Hedefi Onayla")
+                                    with c2:
+                                        btn_revise = st.form_submit_button("🔄 Revizyon İste")
+                                        
+                                    if btn_approve or btn_revise:
+                                        now_str = datetime.datetime.now().isoformat()
+                                        if new_msg.strip():
+                                            new_log = {"role": "Admin", "content": new_msg.strip(), "timestamp": now_str}
+                                            if isinstance(logs, list):
+                                                logs.append(new_log)
+                                            else:
+                                                logs = [new_log]
+                                            g.denetim_loglari = list(logs)
+                                            from sqlalchemy.orm.attributes import flag_modified
+                                            flag_modified(g, "denetim_loglari")
+                                        
+                                        if btn_approve:
+                                            g.admin_approval_status = 'Onaylandı'
+                                            session.commit()
+                                            st.cache_data.clear() # Cache invalidation
+                                            st.success("Hedef onaylandı!")
+                                            st.rerun()
+                                        elif btn_revise:
+                                            if not new_msg.strip():
+                                                st.error("Revizyon istemek için lütfen bir not giriniz.")
+                                            else:
+                                                g.admin_approval_status = 'Revizyon Bekliyor'
+                                                session.commit()
+                                                st.cache_data.clear() # Cache invalidation
+                                                st.warning("Yöneticiye revizyon talebi iletildi.")
+                                                st.rerun()
+                            else:
+                                st.success("Bu hedef onaylanmıştır. Onay süreci tamamlanmıştır.")
+
+                    with tab_onay_bekleyen:
+                        if not onay_bekleyenler:
+                            st.info("Onay bekleyen hedef bulunmuyor.")
+                        else:
+                            for g, emp in onay_bekleyenler:
+                                render_audit_goal(g, emp, is_approved=False)
+
+                    with tab_sohbet:
+                        if not sohbet_edilenler:
+                            st.info("Şu an revizyon bekleyen hedef bulunmuyor.")
+                        else:
+                            for g, emp in sohbet_edilenler:
+                                render_audit_goal(g, emp, is_approved=False)
+                                
+                    with tab_onay:
+                        if not onaylananlar:
+                            st.info("Henüz onaylanmış hedef bulunmuyor.")
+                        else:
+                            for g, emp in onaylananlar:
+                                render_audit_goal(g, emp, is_approved=True)
+                                
+        finally:
+            session.close()
+
+    # ==========================================================================
+    # SEKME 6 — KULLANICI YÖNETİMİ
     # ==========================================================================
     with tab_users:
         st.subheader("👤 Kullanıcı Yönetimi")

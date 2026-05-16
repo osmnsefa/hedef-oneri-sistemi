@@ -57,6 +57,7 @@ def init_session():
         "active_employee": "",
         "active_target": "",
         "decoded_vision": None,
+        "active_session_id": None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -121,8 +122,50 @@ try:
                 _conn.execute(text("ALTER TABLE annual_goals ADD COLUMN vision_stretch_factor FLOAT"))
                 _conn.commit()
                 logging.info("✅ Migration: Vizyon kolonları (vision_text, vision_ambition_level, vision_stretch_factor) annual_goals tablosuna eklendi.")
+                
+            _result_rev = _conn.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'annual_goals' 
+                  AND column_name = 'employee_note'
+            """))
+            if _result_rev.fetchone() is None:
+                _conn.execute(text("ALTER TABLE annual_goals ADD COLUMN employee_note TEXT"))
+                _conn.execute(text("ALTER TABLE annual_goals ADD COLUMN approval_status VARCHAR DEFAULT 'Locked'"))
+                _conn.execute(text("ALTER TABLE annual_goals ADD COLUMN parent_goal_id INTEGER"))
+                _conn.commit()
+                logging.info("✅ Migration: Revizyon kolonları (employee_note, approval_status, parent_goal_id) annual_goals tablosuna eklendi.")
+                
+            _result_admin = _conn.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'annual_goals' 
+                  AND column_name = 'admin_approval_status'
+            """))
+            if _result_admin.fetchone() is None:
+                _conn.execute(text("ALTER TABLE annual_goals ADD COLUMN admin_approval_status VARCHAR DEFAULT 'Onay Bekliyor'"))
+                _conn.execute(text("ALTER TABLE annual_goals ADD COLUMN denetim_loglari JSON"))
+                _conn.commit()
+                logging.info("✅ Migration: Admin denetim kolonları (admin_approval_status, denetim_loglari) annual_goals tablosuna eklendi.")
+                
     except Exception as _mig_err:
         logging.warning(f"Migration kontrolü sırasında uyarı (büyük ihtimalle kolon zaten var): {_mig_err}")
+        
+    try:
+        from src.models import ChatHistory, ChatSession
+        ChatSession.__table__.create(_engine, checkfirst=True)
+        ChatHistory.__table__.create(_engine, checkfirst=True)
+        
+        with _engine.connect() as _conn:
+            _result_ch = _conn.execute(text("SELECT column_name FROM information_schema.columns WHERE table_name = 'chat_history' AND column_name = 'session_id'"))
+            if _result_ch.fetchone() is None:
+                _conn.execute(text("ALTER TABLE chat_history ADD COLUMN session_id VARCHAR"))
+                _conn.commit()
+                logging.info("✅ Migration: 'session_id' kolonu chat_history tablosuna eklendi.")
+                
+        logging.info("✅ Migration: 'chat_history' ve 'chat_sessions' tabloları kontrol edildi/oluşturuldu.")
+    except Exception as _mig_err2:
+        logging.warning(f"Migration kontrolü sırasında uyarı (chat_history/sessions): {_mig_err2}")
     # ────────────────────────────────────────────────────────────────────────
 
     _sys_sess.close()
@@ -183,22 +226,43 @@ with st.sidebar:
 
         # Çalışan Seçimi
         if employees_list:
-            employee_name = st.selectbox("Çalışan", employees_list)
+            emp_index = 0
+            if st.session_state.get('active_employee') in employees_list:
+                emp_index = employees_list.index(st.session_state.get('active_employee'))
+            employee_name = st.selectbox("Çalışan", employees_list, index=emp_index)
         else:
-            employee_name = st.text_input("Çalışan Adı Soyadı", placeholder="Örn: Ahmet Yılmaz")
+            employee_name = st.text_input("Çalışan Adı Soyadı", value=st.session_state.get('active_employee', ''), placeholder="Örn: Ahmet Yılmaz")
             st.warning("Çalışan listesi çekilemedi.")
 
         # Hedef Kategorisi
         default_targets = ["Satış & Pazarlama", "Yazılım Geliştirme", "Operasyonel Verimlilik"]
         options = target_types_list if target_types_list else default_targets
-        target_type = st.selectbox("Hedef Kategorisi", options)
+        t_index = 0
+        if st.session_state.get('active_target') in options:
+            t_index = options.index(st.session_state.get('active_target'))
+        target_type = st.selectbox("Hedef Kategorisi", options, index=t_index)
 
         # Chat kısıtlaması için aktif oturumu senkronize et
         if (st.session_state.active_employee != employee_name or
                 st.session_state.active_target != target_type):
             st.session_state.active_employee = employee_name
             st.session_state.active_target = target_type
+            
+            # Geçmişi DB'den yükle
             st.session_state.chat_history = []
+            st.session_state.active_session_id = None
+            if employee_name and target_type:
+                emp_meta = load_employee_metadata_cached(employee_name)
+                e_sicil = emp_meta.get("Sicil") if emp_meta else None
+                u_sicil = st.session_state.get('user_id')
+                if e_sicil and u_sicil:
+                    from src.data_loader import DataLoader
+                    loader = DataLoader()
+                    sessions = loader.get_chat_sessions(u_sicil, e_sicil, target_type)
+                    if sessions:
+                        st.session_state.active_session_id = sessions[0]['id']
+                        st.session_state.chat_history = loader.get_chat_history(st.session_state.active_session_id)
+
             st.session_state.current_goal_set = None
             st.session_state.proposed_patch = None
             st.session_state.eval_result = None
@@ -208,6 +272,40 @@ with st.sidebar:
             st.session_state.ai_start_time = None
             st.session_state.original_goal_set = None
             st.session_state.decoded_vision = None
+
+        st.markdown("---")
+        st.markdown("### 💬 Sohbet Oturumları")
+        
+        u_sicil = st.session_state.get('user_id')
+        emp_meta = load_employee_metadata_cached(employee_name) if employee_name else None
+        e_sicil = emp_meta.get("Sicil") if emp_meta else None
+        
+        from src.data_loader import DataLoader
+        loader = DataLoader()
+        
+        sessions = []
+        if u_sicil and e_sicil and target_type:
+            sessions = loader.get_chat_sessions(u_sicil, e_sicil, target_type)
+            
+        if st.button("➕ Yeni Sohbet"):
+            st.session_state.active_session_id = None
+            st.session_state.chat_history = []
+            st.session_state.current_goal_set = None
+            st.rerun()
+            
+        if sessions:
+            for s in sessions:
+                btn_label = f"📝 {s['title']} ({s['updated_at'].strftime('%d.%m %H:%M')})"
+                if st.session_state.get('active_session_id') == s['id']:
+                    btn_label = f"🟢 {s['title']}"
+                    
+                if st.button(btn_label, key=f"sess_{s['id']}", use_container_width=True):
+                    st.session_state.active_session_id = s['id']
+                    st.session_state.chat_history = loader.get_chat_history(s['id'])
+                    st.session_state.current_goal_set = None
+                    st.rerun()
+        else:
+            st.info("Henüz geçmiş sohbet yok.")
 
         manager_vision = st.text_area(
             "Yönetici Vizyonu",
@@ -273,7 +371,7 @@ else:
 current_role = st.session_state.get('role', '')
 
 # ---- ADMIN: Sadece Admin Dashboard ----
-if current_role == 'Admin':
+if current_role == 'Admin' and not st.session_state.get('force_chat_view', False):
     render_admin_dashboard()
     st.stop()
 
@@ -302,6 +400,12 @@ is_employee_locked = False
 emp_sicil_for_lock = employee_metadata.get('Sicil') if employee_metadata else None
 
 if emp_sicil_for_lock and target_type:
+    
+    if st.session_state.get('force_chat_view', False):
+        if st.button("🔙 Admin Paneline Dön"):
+            st.session_state.force_chat_view = False
+            st.rerun()
+
     try:
         from src.auth import get_db_session
         from src.models import AnnualGoals
@@ -342,9 +446,12 @@ with tab1:
     # Geçmiş mesajları göster (silinmez, kalıcı)
     chat_placeholder = st.container()
     with chat_placeholder:
-        for user_msg, bot_msg in st.session_state.chat_history:
-            display_chat_message("user", user_msg)
-            display_chat_message("bot", bot_msg)
+        for msg in st.session_state.chat_history:
+            if isinstance(msg, dict):
+                display_chat_message(msg.get("role"), msg.get("content"), msg.get("timestamp"))
+            elif isinstance(msg, tuple) and len(msg) == 2:
+                display_chat_message("user", msg[0])
+                display_chat_message("bot", msg[1])
 
     # Yeni mesaj girişi
     if prompt := st.chat_input(f"{employee_name} hakkında soru sorun..."):
@@ -368,8 +475,29 @@ with tab1:
         # Bot yanıtını göster
         display_chat_message("bot", response)
 
-        # Geçmişe ekle (tuple olarak)
-        st.session_state.chat_history.append((prompt, response))
+        # DB'ye kaydet ve Geçmişe ekle (dict olarak)
+        u_sicil = st.session_state.get('user_id')
+        e_sicil = employee_metadata.get('Sicil') if employee_metadata else None
+        
+        import datetime
+        now = datetime.datetime.now()
+        
+        st.session_state.chat_history.append({"role": "user", "content": prompt, "timestamp": now})
+        st.session_state.chat_history.append({"role": "bot", "content": response, "timestamp": now})
+        
+        if u_sicil and e_sicil:
+            from src.data_loader import DataLoader
+            loader = DataLoader()
+            
+            if not st.session_state.get('active_session_id'):
+                title = prompt[:25] + "..." if len(prompt) > 25 else prompt
+                new_session_id = loader.create_chat_session(u_sicil, e_sicil, target_type, title)
+                st.session_state.active_session_id = new_session_id
+                
+            sess_id = st.session_state.get('active_session_id')
+            loader.save_chat_message(u_sicil, e_sicil, target_type, "user", prompt, session_id=sess_id)
+            loader.save_chat_message(u_sicil, e_sicil, target_type, "bot", response, session_id=sess_id)
+
         st.rerun()
 
     if st.session_state.chat_history:
@@ -416,7 +544,27 @@ with tab2:
                     bot_msg = f"Sizin için **{target_type}** kategorisinde hedefler ürettim:\n\n"
                     bot_msg += analyzer.format_goal_set(goal_set)
                     bot_msg += "\n\nBu hedefler hakkında konuşmak veya revizyon istemek için bana sorular sorabilirsiniz."
-                    st.session_state.chat_history.append(("Bu çalışan için hedef önerir misin?", bot_msg))
+                    
+                    user_prompt_txt = "Bu çalışan için hedef önerir misin?"
+                    u_sicil = st.session_state.get('user_id')
+                    e_sicil = employee_metadata.get('Sicil') if employee_metadata else None
+                    import datetime
+                    now = datetime.datetime.now()
+                    st.session_state.chat_history.append({"role": "user", "content": user_prompt_txt, "timestamp": now})
+                    st.session_state.chat_history.append({"role": "bot", "content": bot_msg, "timestamp": now})
+                    
+                    if u_sicil and e_sicil:
+                        from src.data_loader import DataLoader
+                        loader = DataLoader()
+                        
+                        if not st.session_state.get('active_session_id'):
+                            title = f"{target_type} Hedefleri"
+                            new_session_id = loader.create_chat_session(u_sicil, e_sicil, target_type, title)
+                            st.session_state.active_session_id = new_session_id
+                            
+                        sess_id = st.session_state.get('active_session_id')
+                        loader.save_chat_message(u_sicil, e_sicil, target_type, "user", user_prompt_txt, session_id=sess_id)
+                        loader.save_chat_message(u_sicil, e_sicil, target_type, "bot", bot_msg, session_id=sess_id)
                     
                 st.rerun()
 
@@ -565,7 +713,27 @@ with tab2:
                         # Revize edilen hedefi chat'e at
                         bot_msg = f"Hedefleriniz geri bildiriminiz doğrultusunda revize edildi (v{gs['version']}).\n\n"
                         bot_msg += analyzer.format_goal_set(gs)
-                        st.session_state.chat_history.append(("Verdiğim geri bildirimi uygulayarak hedefleri revize et.", bot_msg))
+                        
+                        user_prompt_txt = "Verdiğim geri bildirimi uygulayarak hedefleri revize et."
+                        u_sicil = st.session_state.get('user_id')
+                        e_sicil = employee_metadata.get('Sicil') if employee_metadata else None
+                        import datetime
+                        now = datetime.datetime.now()
+                        st.session_state.chat_history.append({"role": "user", "content": user_prompt_txt, "timestamp": now})
+                        st.session_state.chat_history.append({"role": "bot", "content": bot_msg, "timestamp": now})
+                        
+                        if u_sicil and e_sicil:
+                            from src.data_loader import DataLoader
+                            loader = DataLoader()
+                            
+                            if not st.session_state.get('active_session_id'):
+                                title = f"{target_type} Revizyonu"
+                                new_session_id = loader.create_chat_session(u_sicil, e_sicil, target_type, title)
+                                st.session_state.active_session_id = new_session_id
+                                
+                            sess_id = st.session_state.get('active_session_id')
+                            loader.save_chat_message(u_sicil, e_sicil, target_type, "user", user_prompt_txt, session_id=sess_id)
+                            loader.save_chat_message(u_sicil, e_sicil, target_type, "bot", bot_msg, session_id=sess_id)
                         
                         st.success("✅ Versiyon güncellendi!")
                         st.rerun()
@@ -596,11 +764,15 @@ with tab2:
                             duration = int(time.time() - st.session_state.ai_start_time)
                             duration = min(duration, 3600)  # Max 1 hour outlier clamp
                             
-                        # 1. Eski AnnualGoals kayıtlarını temizle (aynı sicil+kategori için)
-                        _lsess.query(AnnualGoals).filter(
+                        # 1. Eski AnnualGoals kayıtlarını pasife çek (aynı sicil+kategori için)
+                        old_goals = _lsess.query(AnnualGoals).filter(
                             AnnualGoals.employee_sicil == emp_sicil_for_lock,
-                            AnnualGoals.hedef_turu == target_type
-                        ).delete()
+                            AnnualGoals.hedef_turu == target_type,
+                            AnnualGoals.approval_status != 'Passive'
+                        ).all()
+                        for og in old_goals:
+                            og.approval_status = 'Passive'
+                            og.is_locked = False
                         
                         # 2. Yeni hedefleri insert et
                         gs_data = st.session_state.current_goal_set
@@ -641,6 +813,8 @@ with tab2:
                                 evidence_justification=g.get('evidence_justification', 'Gerekçe Yok'),
                                 hedef_yonu=g.get('metrics', {}).get('direction', 'Artan'),
                                 is_locked=True,
+                                approval_status='Locked',
+                                parent_goal_id=st.session_state.get('revision_parent_goal_id'),
                                 locked_by_sicil=st.session_state.get('user_id'),
                                 version_no=gs_data.get("version", 1),
                                 ai_status=ai_status,
@@ -656,6 +830,12 @@ with tab2:
                             
                         _lsess.commit()
                         _lsess.close()
+                        
+                        st.cache_data.clear() # Cache invalidation
+                        
+                        # Revizyon durumunu temizle
+                        st.session_state.revision_parent_goal_id = None
+                        
                         st.success(f"✅ {employee_name} için {target_type} hedefleri KİLİTLENDİ.")
                         st.rerun()
                     except Exception as e:
@@ -675,6 +855,7 @@ with tab2:
                         _r.is_locked = False
                     _lsess.commit()
                     _lsess.close()
+                    st.cache_data.clear() # Cache invalidation
                     st.success(f"🔓 {employee_name} için {target_type} hedefleri açıldı.")
                     st.rerun()
                 except Exception as e:
@@ -743,12 +924,25 @@ with tab4:
             _asess = get_db_session()
             _all_locked = _asess.query(AnnualGoals).filter(
                 AnnualGoals.employee_sicil == emp_sicil_for_lock,
-                AnnualGoals.is_locked == True
+                AnnualGoals.is_locked == True,
+                AnnualGoals.approval_status != 'Passive'
             ).order_by(AnnualGoals.yil.desc(), AnnualGoals.hedef_turu).all()
 
             if not _all_locked:
                 st.info("Bu çalışana ait kesinleştirilmiş hedef bulunmamaktadır. Hedef Süreci sekmesinden yeni hedef oluşturup onaylayabilirsiniz.")
             else:
+                def has_chat_history(g):
+                    logs = getattr(g, 'denetim_loglari', [])
+                    if isinstance(logs, str):
+                        import json
+                        try: logs = json.loads(logs)
+                        except: logs = []
+                    return bool(logs)
+
+                _onaylananlar = [g for g in _all_locked if g.admin_approval_status == 'Onaylandı']
+                _onay_bekleyenler = [g for g in _all_locked if g.admin_approval_status != 'Onaylandı' and not has_chat_history(g)]
+                _sohbet_edilenler = [g for g in _all_locked if g.admin_approval_status != 'Onaylandı' and has_chat_history(g)]
+                
                 # ── Özet metrik kartları ──────────────────────────────────────
                 _total = len(_all_locked)
                 _artan = sum(1 for g in _all_locked if getattr(g, 'hedef_yonu', 'Artan') == 'Artan')
@@ -759,66 +953,151 @@ with tab4:
                 _mc3.metric("⬇️ Azalan Hedefler", _azalan)
                 st.markdown("---")
 
-                # ── Excel görünümlü tablo ─────────────────────────────────────
-                # Başlık satırı
-                _hc = st.columns([0.4, 1.2, 0.8, 2.8, 0.7, 0.7, 0.5, 0.5])
-                _headers = ["Yıl", "Tür", "Yön", "SMART Hedef", "Önceki", "Hedef", "Değişim", "İşlem"]
-                for _h, _col in zip(_headers, _hc):
-                    _col.markdown(f'<div class="excel-table-header">{_h}</div>', unsafe_allow_html=True)
-
+                tab_onay_bekleyen, tab_sohbet, tab_onay = st.tabs([
+                    f"Onay Bekleyenler ({len(_onay_bekleyenler)})", 
+                    f"Revizyon Bekleyenler ({len(_sohbet_edilenler)})", 
+                    f"Onaylanan Hedefler ({len(_onaylananlar)})"
+                ])
+                
                 _export_rows = []
-                for _goal in _all_locked:
-                    _yil = _goal.yil
-                    _tur = _goal.hedef_turu
-                    _yon = getattr(_goal, 'hedef_yonu', 'Artan')
-                    _arrow = "⬆️" if _yon == "Artan" else "⬇️"
-                    _smart = _goal.smart_hedef or "—"
-                    _hedef_val = _goal.hedef_degeri
+                
+                def render_goals_table(goals_list, is_approved_tab):
+                    if not goals_list:
+                        st.info("Bu sekmede gösterilecek hedef bulunmuyor.")
+                        return
+                        
+                    # ── Excel görünümlü tablo ─────────────────────────────────────
+                    # Başlık satırı
+                    _hc = st.columns([0.4, 1.2, 0.8, 2.8, 0.7, 0.7, 0.5, 0.5])
+                    _headers = ["Yıl", "Tür", "Yön", "SMART Hedef", "Önceki", "Hedef", "Değişim", "İşlem"]
+                    for _h, _col in zip(_headers, _hc):
+                        _col.markdown(f'<div class="excel-table-header">{_h}</div>', unsafe_allow_html=True)
+    
+                    for _goal in goals_list:
+                        _yil = _goal.yil
+                        _tur = _goal.hedef_turu
+                        _yon = getattr(_goal, 'hedef_yonu', 'Artan')
+                        _arrow = "⬆️" if _yon == "Artan" else "⬇️"
+                        _smart = _goal.smart_hedef or "—"
+                        _hedef_val = _goal.hedef_degeri
+    
+                        # Önceki değeri geçmiş tablosundan çek
+                        _prev_val = "—"
+                        try:
+                            _hist = load_history_cached(employee_name, _tur)
+                            if not _hist.empty:
+                                _prev_col = next((c for c in _hist.columns if 'gerçekleşen' in c.lower() or 'gerceklesen' in c.lower()), None)
+                                if _prev_col:
+                                    _prev_val = _hist[_prev_col].dropna().iloc[-1] if not _hist[_prev_col].dropna().empty else "—"
+                        except Exception:
+                            pass
+    
+                        # Değişim oranı hesapla
+                        _change_str = "—"
+                        try:
+                            _p = float(str(_prev_val).replace(',', '.'))
+                            _t = float(str(_hedef_val).replace(',', '.'))
+                            if _p != 0:
+                                _chg = ((_t - _p) / abs(_p)) * 100
+                                _sign = "▲" if _chg >= 0 else "▼"
+                                _change_str = f"{_sign} %{abs(_chg):.1f}"
+                        except Exception:
+                            pass
+    
+                        _rc = st.columns([0.4, 1.2, 0.8, 2.8, 0.7, 0.7, 0.5, 0.5])
+                        _rc[0].markdown(f'<div class="excel-table-row">{_yil}</div>', unsafe_allow_html=True)
+                        _rc[1].markdown(f'<div class="excel-table-row">{_tur}</div>', unsafe_allow_html=True)
+                        _rc[2].markdown(f'<div class="excel-table-row">{_arrow} {_yon}</div>', unsafe_allow_html=True)
+                        _rc[3].markdown(f'<div class="excel-table-row">{_smart}</div>', unsafe_allow_html=True)
+                        _rc[4].markdown(f'<div class="excel-table-row">{_prev_val}</div>', unsafe_allow_html=True)
+                        _rc[5].markdown(f'<div class="excel-table-row"><b>{_hedef_val}</b></div>', unsafe_allow_html=True)
+                        _rc[6].markdown(f'<div class="excel-table-row">{_change_str}</div>', unsafe_allow_html=True)
+                        with _rc[7]:
+                            if current_role != 'Employee':
+                                if st.button("🗑️", key=f"tab4_del_{_goal.id}", help="Bu hedefi kalıcı olarak sil"):
+                                    _asess.delete(_goal)
+                                    _asess.commit()
+                                    st.success(f"✅ Hedef silindi.")
+                                    st.rerun()
+    
+                        # Çalışan Notu & İtiraz Bloğu
+                        if current_role == 'Employee':
+                            if getattr(_goal, 'approval_status', 'Locked') == 'Locked':
+                                with st.expander(f"💬 {_tur} Hedefine Görüş Bildir"):
+                                    with st.form(f"feedback_form_{_goal.id}"):
+                                        f_note = st.text_area("İtiraz / Geri Bildiriminiz", placeholder="Örn: Bu hedef değeri piyasa koşullarında ulaşılabilir değil...")
+                                        f_submit = st.form_submit_button("Gönder")
+                                        if f_submit and f_note:
+                                            _goal.employee_note = f_note
+                                            _goal.approval_status = 'Feedback_Received'
+                                            _asess.commit()
+                                            st.success("Geri bildiriminiz yöneticiye iletildi!")
+                                            st.rerun()
+                            elif getattr(_goal, 'approval_status', 'Locked') == 'Feedback_Received':
+                                st.info(f"⏳ İtirazınız yönetici onayında: {_goal.employee_note}")
+                        else: # Manager or Admin
+                            if getattr(_goal, 'approval_status', 'Locked') == 'Feedback_Received':
+                                st.warning(f"💬 Çalışan İtirazı: {_goal.employee_note}")
+                                    
+                        # Admin Stratejik Denetim Bloğu (Yöneticiler için)
+                        if current_role in ['Manager', 'Admin']:
+                            admin_status = getattr(_goal, 'admin_approval_status', 'Onay Bekliyor')
+                            if not is_approved_tab or admin_status == 'Onaylandı':
+                                st.markdown("---")
+                                with st.expander(f"🛡️ Admin Denetim Durumu: {admin_status}"):
+                                    logs = getattr(_goal, 'denetim_loglari', [])
+                                    if isinstance(logs, str):
+                                        import json
+                                        try: logs = json.loads(logs)
+                                        except: logs = []
+                                    if not logs: logs = []
+                                    
+                                    if logs:
+                                        for log in logs:
+                                            role_icon = "🛡️ Admin" if log.get('role') == 'Admin' else "👔 Yönetici"
+                                            ts = log.get('timestamp', '')
+                                            if ts:
+                                                try: ts = ts.split('.')[0]
+                                                except: pass
+                                            st.markdown(f"**{role_icon}** 🕒 `{ts}`\n> {log.get('content')}")
+                                    else:
+                                        st.caption("Henüz bir iletişim kaydı yok.")
+                                        
+                                    if current_role == 'Manager' and not is_approved_tab:
+                                        with st.form(f"manager_audit_form_{_goal.id}"):
+                                            mgr_msg = st.text_area("Admin'e Yanıt Yaz", placeholder="Örn: Bu hedef revizyon isteğine istinaden düzenlendi.")
+                                            if st.form_submit_button("Gönder"):
+                                                if mgr_msg.strip():
+                                                    import datetime
+                                                    now_str = datetime.datetime.now().isoformat()
+                                                    new_log = {"role": "Manager", "content": mgr_msg.strip(), "timestamp": now_str}
+                                                    if isinstance(logs, list):
+                                                        logs.append(new_log)
+                                                    else:
+                                                        logs = [new_log]
+                                                    _goal.denetim_loglari = list(logs)
+                                                    from sqlalchemy.orm.attributes import flag_modified
+                                                    flag_modified(_goal, "denetim_loglari")
+                                                    _goal.admin_approval_status = 'Onay Bekliyor'
+                                                    _asess.commit()
+                                                    st.success("Mesajınız Admin'e iletildi.")
+                                                    st.rerun()
+    
+                        _export_rows.append({
+                            "Yıl": _yil, "Hedef Türü": _tur, "Yön": _yon,
+                            "SMART Hedef": _smart, "Önceki Değer": _prev_val,
+                            "Hedef Değeri": _hedef_val, "Değişim": _change_str,
+                            "Kilitleyen": _goal.locked_by_sicil
+                        })
 
-                    # Önceki değeri geçmiş tablosundan çek
-                    _prev_val = "—"
-                    try:
-                        _hist = load_history_cached(employee_name, _tur)
-                        if not _hist.empty:
-                            _prev_col = next((c for c in _hist.columns if 'gerçekleşen' in c.lower() or 'gerceklesen' in c.lower()), None)
-                            if _prev_col:
-                                _prev_val = _hist[_prev_col].dropna().iloc[-1] if not _hist[_prev_col].dropna().empty else "—"
-                    except Exception:
-                        pass
-
-                    # Değişim oranı hesapla
-                    _change_str = "—"
-                    try:
-                        _p = float(str(_prev_val).replace(',', '.'))
-                        _t = float(str(_hedef_val).replace(',', '.'))
-                        if _p != 0:
-                            _chg = ((_t - _p) / abs(_p)) * 100
-                            _sign = "▲" if _chg >= 0 else "▼"
-                            _change_str = f"{_sign} %{abs(_chg):.1f}"
-                    except Exception:
-                        pass
-
-                    _rc = st.columns([0.4, 1.2, 0.8, 2.8, 0.7, 0.7, 0.5, 0.5])
-                    _rc[0].markdown(f'<div class="excel-table-row">{_yil}</div>', unsafe_allow_html=True)
-                    _rc[1].markdown(f'<div class="excel-table-row">{_tur}</div>', unsafe_allow_html=True)
-                    _rc[2].markdown(f'<div class="excel-table-row">{_arrow} {_yon}</div>', unsafe_allow_html=True)
-                    _rc[3].markdown(f'<div class="excel-table-row">{_smart}</div>', unsafe_allow_html=True)
-                    _rc[4].markdown(f'<div class="excel-table-row">{_prev_val}</div>', unsafe_allow_html=True)
-                    _rc[5].markdown(f'<div class="excel-table-row"><b>{_hedef_val}</b></div>', unsafe_allow_html=True)
-                    _rc[6].markdown(f'<div class="excel-table-row">{_change_str}</div>', unsafe_allow_html=True)
-                    with _rc[7]:
-                        if st.button("🗑️", key=f"tab4_del_{_goal.id}", help="Bu hedefi kalıcı olarak sil"):
-                            _asess.delete(_goal)
-                            _asess.commit()
-                            st.success(f"✅ Hedef silindi.")
-                            st.rerun()
-
-                    _export_rows.append({
-                        "Yıl": _yil, "Hedef Türü": _tur, "Yön": _yon,
-                        "SMART Hedef": _smart, "Önceki Değer": _prev_val,
-                        "Hedef Değeri": _hedef_val, "Değişim": _change_str,
-                        "Kilitleyen": _goal.locked_by_sicil
-                    })
+                with tab_onay_bekleyen:
+                    render_goals_table(_onay_bekleyenler, is_approved_tab=False)
+                    
+                with tab_sohbet:
+                    render_goals_table(_sohbet_edilenler, is_approved_tab=False)
+                    
+                with tab_onay:
+                    render_goals_table(_onaylananlar, is_approved_tab=True)
 
                 st.markdown("<br>", unsafe_allow_html=True)
 

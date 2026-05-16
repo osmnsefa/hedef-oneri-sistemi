@@ -4,12 +4,21 @@ import chromadb
 from chromadb.utils import embedding_functions
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+import streamlit as st
 
 from src.config import Config
 from src.models import JobDescriptions, EmployeeFeedback
 
 logger = logging.getLogger(__name__)
 
+
+@st.cache_resource
+def _get_chroma_client(db_path):
+    return chromadb.PersistentClient(path=db_path)
+
+@st.cache_resource
+def _get_embedding_func(model_name):
+    return embedding_functions.SentenceTransformerEmbeddingFunction(model_name=model_name)
 
 class VectorStore:
     _instance = None
@@ -22,12 +31,8 @@ class VectorStore:
 
     def initialize(self):
         try:
-            self.client = chromadb.PersistentClient(path=Config.CHROMA_DB_PATH)
-
-            # SentenceTransformer kullanarak config'deki modeli yüklüyoruz
-            self.embedding_func = embedding_functions.SentenceTransformerEmbeddingFunction(
-                model_name=Config.EMBEDDING_MODEL
-            )
+            self.client = _get_chroma_client(Config.CHROMA_DB_PATH)
+            self.embedding_func = _get_embedding_func(Config.EMBEDDING_MODEL)
 
             self.collection = self.client.get_or_create_collection(
                 name="pms_data",

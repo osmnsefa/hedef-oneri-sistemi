@@ -15,31 +15,37 @@ def get_db_session():
     Session = sessionmaker(bind=engine)
     return Session()
 
-def get_allowed_sicil_list(current_user_sicil, current_user_role, session):
+@st.cache_data(ttl=3600)
+def get_allowed_sicil_list(current_user_sicil, current_user_role):
     """
     Rol (Admin/Manager/Employee) bazlı özyineli yetki listesi döndürür (Sicil dizisi).
+    Her saat başı veya yetki değiştiğinde güncellenir.
     """
-    if current_user_role == 'Admin':
-        all_users = session.query(User).all()
-        return [u.sicil_no for u in all_users]
-        
-    elif current_user_role == 'Employee':
+    if current_user_role == 'Employee':
         return [current_user_sicil]
         
-    elif current_user_role == 'Manager':
-        allowed_sicils = set()
-        to_check = [current_user_sicil]
-        
-        while to_check:
-            cur = to_check.pop(0)
-            if cur not in allowed_sicils:
-                allowed_sicils.add(cur)
-                subs = session.query(User).filter(User.manager_sicil == cur).all()
-                for sub_user in subs:
-                    if sub_user.sicil_no not in allowed_sicils:
-                        to_check.append(sub_user.sicil_no)
-                        
-        return list(allowed_sicils)
+    session = get_db_session()
+    try:
+        if current_user_role == 'Admin':
+            all_users = session.query(User).all()
+            return [u.sicil_no for u in all_users]
+            
+        elif current_user_role == 'Manager':
+            allowed_sicils = set()
+            to_check = [current_user_sicil]
+            
+            while to_check:
+                cur = to_check.pop(0)
+                if cur not in allowed_sicils:
+                    allowed_sicils.add(cur)
+                    subs = session.query(User).filter(User.manager_sicil == cur).all()
+                    for sub_user in subs:
+                        if sub_user.sicil_no not in allowed_sicils:
+                            to_check.append(sub_user.sicil_no)
+                            
+            return list(allowed_sicils)
+    finally:
+        session.close()
         
     return []
 
@@ -136,7 +142,7 @@ def render_login_screen():
                 st.success("Giriş Başarılı! Hoş Geldiniz, yetkileriniz ayarlanıyor...")
                 
                 # Yetki hesaplaması
-                allowed_sicils = get_allowed_sicil_list(user.sicil_no, user.role, session)
+                allowed_sicils = get_allowed_sicil_list(user.sicil_no, user.role)
                 
                 st.session_state['user_id'] = user.sicil_no
                 st.session_state['username'] = user.sicil_no
