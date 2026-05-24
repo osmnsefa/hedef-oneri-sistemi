@@ -148,6 +148,20 @@ try:
                 _conn.commit()
                 logging.info("✅ Migration: Admin denetim kolonları (admin_approval_status, denetim_loglari) annual_goals tablosuna eklendi.")
                 
+            # Revizyon İzlenebilirlik kolonları (is_revised, revised_at, revision_source)
+            _result_revizyon = _conn.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'annual_goals' 
+                  AND column_name = 'is_revised'
+            """))
+            if _result_revizyon.fetchone() is None:
+                _conn.execute(text("ALTER TABLE annual_goals ADD COLUMN is_revised BOOLEAN DEFAULT FALSE"))
+                _conn.execute(text("ALTER TABLE annual_goals ADD COLUMN revised_at TIMESTAMP"))
+                _conn.execute(text("ALTER TABLE annual_goals ADD COLUMN revision_source VARCHAR"))
+                _conn.commit()
+                logging.info("✅ Migration: Revizyon izlenebilirlik kolonları (is_revised, revised_at, revision_source) annual_goals tablosuna eklendi.")
+                
     except Exception as _mig_err:
         logging.warning(f"Migration kontrolü sırasında uyarı (büyük ihtimalle kolon zaten var): {_mig_err}")
         
@@ -410,16 +424,18 @@ if emp_sicil_for_lock and target_type:
         from src.auth import get_db_session
         from src.models import AnnualGoals
         _lsess = get_db_session()
-        _locked_rec = _lsess.query(AnnualGoals).filter(
+        _locked_count = _lsess.query(AnnualGoals).filter(
             AnnualGoals.employee_sicil == emp_sicil_for_lock,
             AnnualGoals.hedef_turu == target_type,
-            AnnualGoals.is_locked == True
-        ).first()
-        if _locked_rec:
+            AnnualGoals.is_locked == True,
+            AnnualGoals.approval_status != 'Passive'
+        ).count()
+        if _locked_count >= 3:
             is_employee_locked = True
+        locked_goals_count = _locked_count
         _lsess.close()
     except Exception:
-        pass
+        locked_goals_count = 0
 
 is_disabled_by_lock = is_employee_locked if current_role != 'Admin' else False
 
@@ -508,8 +524,160 @@ with tab1:
 # ====================== TAB 2: HEDEF SÜRECİ ======================
 with tab2:
 
+    _lsess = get_db_session()
+    
+    if not st.session_state.current_goal_set and emp_sicil_for_lock and target_type:
+        _draft_goals = _lsess.query(AnnualGoals).filter(
+            AnnualGoals.employee_sicil == emp_sicil_for_lock,
+            AnnualGoals.hedef_turu == target_type,
+            AnnualGoals.approval_status == 'Draft'
+        ).all()
+        if _draft_goals:
+            goals_list = []
+            for dg in _draft_goals:
+                goals_list.append({
+                    "id": dg.id,
+                    "smart_goal": dg.smart_hedef,
+                    "metrics": {
+                        "target_value": dg.hedef_degeri,
+                        "unit": dg.birim,
+                        "direction": dg.hedef_yonu
+                    },
+                    "evidence_justification": dg.evidence_justification,
+                    "is_locked": False
+                })
+            st.session_state.current_goal_set = {"version": _draft_goals[0].version_no, "goals": goals_list}
+
+    # Revizyon Bekleyen Hedef Kontrolü
+    _lsess = get_db_session()
+    _rev_goals = _lsess.query(AnnualGoals).filter(
+        AnnualGoals.employee_sicil == emp_sicil_for_lock,
+        AnnualGoals.hedef_turu == target_type,
+        AnnualGoals.admin_approval_status == 'Revizyon Bekliyor',
+        AnnualGoals.approval_status != 'Passive'
+    ).all()
+    _lsess.close()
+
+    if _rev_goals and current_role in ['Manager', 'Admin']:
+        st.warning("⚠️ Admin bu hedef kategorisi için Revizyon talep etti. Lütfen aşağıdaki hedefleri düzenleyin.")
+        for rg in _rev_goals:
+            with st.expander(f"📝 {rg.smart_hedef[:50]}...", expanded=True):
+                logs = rg.denetim_loglari
+                if isinstance(logs, str):
+                    import json
+                    try: logs = json.loads(logs)
+                    except: logs = []
+                if logs:
+                    last_msg = logs[-1].get('content', '') if logs else ''
+                    st.error(f"**Admin Notu:** {last_msg}")
+                
+                # Editör Modu
+                st.markdown("#### 🛠️ Editör Modu (Manuel Düzenleme)")
+                with st.form(f"manual_edit_{rg.id}"):
+                    new_smart = st.text_area("Yeni SMART Hedef Cümlesi", value=rg.smart_hedef)
+                    new_val = st.number_input("Yeni Hedef Değeri", value=float(rg.hedef_degeri) if rg.hedef_degeri else 0.0)
+                    
+                    if st.form_submit_button("💾 Manuel Değişikliği Kaydet"):
+                        val_res = analyzer.validate_manual_revision(rg.hedef_degeri, new_val, getattr(rg, 'hedef_yonu', 'Artan'))
+                        if not val_res["valid"]:
+                            st.error(val_res["error"])
+                        else:
+                            _lsess = get_db_session()
+                            _rg_db = _lsess.query(AnnualGoals).filter(AnnualGoals.id == rg.id).first()
+                            
+                            # Eski veriyi pasife çek, yenisini insert et (Traceability)
+                            _rg_db.approval_status = 'Passive'
+                            _rg_db.is_locked = False
+                            
+                            new_goal = AnnualGoals(
+                                employee_sicil=_rg_db.employee_sicil,
+                                yil=_rg_db.yil,
+                                hedef_turu=_rg_db.hedef_turu,
+                                smart_hedef=new_smart,
+                                hedef_degeri=new_val,
+                                birim=_rg_db.birim,
+                                evidence_justification=_rg_db.evidence_justification,
+                                hedef_yonu=_rg_db.hedef_yonu,
+                                is_locked=True,
+                                approval_status='Locked',
+                                admin_approval_status='Onay Bekliyor',
+                                parent_goal_id=_rg_db.id,
+                                locked_by_sicil=st.session_state.get('user_id'),
+                                version_no=_rg_db.version_no + 1,
+                                ai_status='Manuel',
+                                denetim_loglari=_rg_db.denetim_loglari,
+                                is_revised=True,
+                                revised_at=datetime.datetime.now(),
+                                revision_source='Manual'
+                            )
+                            _lsess.add(new_goal)
+                            _lsess.commit()
+                            _lsess.close()
+                            st.cache_data.clear()
+                            st.success("✅ Revizyon başarıyla kaydedildi ve onaya gönderildi.")
+                            st.rerun()
+                
+                st.markdown("#### 🤖 AI Danışman (Deep Context)")
+                ai_req = st.text_input("Hedef için AI'dan ne istiyorsunuz?", placeholder="Örn: Bu hedefi daha teknik bir dille yaz.", key=f"ai_req_{rg.id}")
+                if st.button("✨ AI'dan Revizyon İste", key=f"ai_btn_{rg.id}"):
+                    with st.spinner("AI hedefinizi revize ediyor..."):
+                        history_df = load_history_cached(employee_name, target_type)
+                        history_text = history_df.to_markdown(index=False) if not history_df.empty else "Sayısal veri yok."
+                        
+                        # Deep context prompt
+                        prompt = f"Şu anki hedef: '{rg.smart_hedef}' (Değer: {rg.hedef_degeri} {rg.birim}). Yönetici talebi: '{ai_req}'. Lütfen {analyzer.version} standartlarına uygun olarak hedefi güncelle ve sadece yeni SMART cümle ile yeni sayısal değeri içeren JSON dön: {{'smart_hedef': '...', 'hedef_degeri': 0.0}}"
+                        
+                        resp = analyzer.llm_client.generate_response(system_prompt="Sen AI hedef revizyon asistanısın. Kurallara uygun JSON dön.", user_prompt=prompt, json_mode=True)
+                        import json
+                        try:
+                            resp_json = json.loads(resp)
+                            st.session_state[f'ai_suggest_{rg.id}'] = resp_json
+                        except:
+                            st.error("AI yanıtı JSON olarak alınamadı.")
+                            
+                if st.session_state.get(f'ai_suggest_{rg.id}'):
+                    ai_sug = st.session_state[f'ai_suggest_{rg.id}']
+                    st.info(f"**AI Önerisi:**\n\nSMART Hedef: {ai_sug.get('smart_hedef')}\nDeğer: {ai_sug.get('hedef_degeri')}")
+                    if st.button("✅ AI Önerisini Onayla ve Kaydet (Human Oversight)", key=f"ai_approve_{rg.id}", type="primary"):
+                        val_res = analyzer.validate_manual_revision(rg.hedef_degeri, ai_sug.get('hedef_degeri', rg.hedef_degeri), getattr(rg, 'hedef_yonu', 'Artan'))
+                        if not val_res["valid"]:
+                            st.error(f"AI Önerisi kısıtlamalara takıldı: {val_res['error']}")
+                        else:
+                            _lsess = get_db_session()
+                            _rg_db = _lsess.query(AnnualGoals).filter(AnnualGoals.id == rg.id).first()
+                            _rg_db.approval_status = 'Passive'
+                            _rg_db.is_locked = False
+                            new_goal = AnnualGoals(
+                                employee_sicil=_rg_db.employee_sicil,
+                                yil=_rg_db.yil,
+                                hedef_turu=_rg_db.hedef_turu,
+                                smart_hedef=ai_sug.get('smart_hedef', rg.smart_hedef),
+                                hedef_degeri=val_res['clamped_value'],
+                                birim=_rg_db.birim,
+                                evidence_justification=_rg_db.evidence_justification,
+                                hedef_yonu=_rg_db.hedef_yonu,
+                                is_locked=True,
+                                approval_status='Locked',
+                                admin_approval_status='Onay Bekliyor',
+                                parent_goal_id=_rg_db.id,
+                                locked_by_sicil=st.session_state.get('user_id'),
+                                version_no=_rg_db.version_no + 1,
+                                ai_status='Revize',
+                                denetim_loglari=_rg_db.denetim_loglari,
+                                is_revised=True,
+                                revised_at=datetime.datetime.now(),
+                                revision_source='AI-Assisted'
+                            )
+                            _lsess.add(new_goal)
+                            _lsess.commit()
+                            _lsess.close()
+                            st.cache_data.clear()
+                            del st.session_state[f'ai_suggest_{rg.id}']
+                            st.success("✅ AI Revizyonu başarıyla kaydedildi ve onaya gönderildi.")
+                            st.rerun()
+
     # 1. BASELINE OLUŞTURMA
-    if not st.session_state.current_goal_set:
+    elif not st.session_state.current_goal_set:
         if is_employee_locked:
             st.error("🔒 Bu çalışanın bu kategorideki hedefleri KESİNLEŞTİRİLMİŞ(Kilitli)'tir. (Değişiklik yapamazsınız)")
         
@@ -520,24 +688,63 @@ with tab2:
 
         if st.button("✨ Hedef Öner", use_container_width=True,
                      disabled=is_disabled_by_lock or not (employee_name and manager_vision)):
-            with st.spinner(f"🤖 {employee_name} için 3 SMART hedef oluşturuluyor..."):
-                history_df = load_history_cached(employee_name, target_type)
-                history_text = history_df.to_markdown(index=False) if not history_df.empty else "Sayısal veri yok."
-                
-                # --- NEW LOGIC: VİZYON ÇÖZÜMLEME ---
-                decoded_vision = analyzer.vision_decoder.decode(manager_vision)
-                st.session_state.decoded_vision = decoded_vision
-                
-                goal_set = analyzer.analyze_and_suggest(employee_name, target_type, manager_vision, history_text, decoded_vision=decoded_vision)
-                
-                # Telemetry Initialize
-                import time, copy
-                st.session_state.ai_start_time = time.time()
-                st.session_state.regen_count += 1
-                st.session_state.chat_interaction_count = 0
-                st.session_state.original_goal_set = copy.deepcopy(goal_set)
-                
-                st.session_state.current_goal_set = goal_set
+            remaining_goals_to_generate = 3 - locked_goals_count
+            if remaining_goals_to_generate <= 0:
+                st.error("Bu kategori için maksimum kilitli hedef sayısına (3) ulaşıldı.")
+            else:
+                with st.spinner(f"🤖 {employee_name} için {remaining_goals_to_generate} SMART hedef oluşturuluyor..."):
+                    history_df = load_history_cached(employee_name, target_type)
+                    history_text = history_df.to_markdown(index=False) if not history_df.empty else "Sayısal veri yok."
+                    
+                    # --- NEW LOGIC: VİZYON ÇÖZÜMLEME ---
+                    decoded_vision = analyzer.vision_decoder.decode(manager_vision)
+                    st.session_state.decoded_vision = decoded_vision
+                    
+                    goal_set = analyzer.analyze_and_suggest(employee_name, target_type, manager_vision, history_text, decoded_vision=decoded_vision, goal_count=remaining_goals_to_generate)
+                    
+                    # Telemetry Initialize
+                    import time, copy
+                    st.session_state.ai_start_time = time.time()
+                    st.session_state.regen_count += 1
+                    st.session_state.chat_interaction_count = 0
+                    st.session_state.original_goal_set = copy.deepcopy(goal_set)
+                    
+                    # Veritabanına taslak olarak ekle
+                    _lsess = get_db_session()
+                    import datetime
+                    current_year = datetime.datetime.now().year + 1
+                    for idx, g in enumerate(goal_set.get("goals", [])):
+                        metric_val = str(g.get('metrics', {}).get('target_value', '0')).replace(',', '.')
+                        try:
+                            metric_float = float(metric_val)
+                        except:
+                            metric_float = 0.0
+                        
+                        new_draft = AnnualGoals(
+                            employee_sicil=emp_sicil_for_lock,
+                            yil=current_year,
+                            hedef_turu=target_type,
+                            smart_hedef=g.get('smart_goal', ''),
+                            hedef_degeri=metric_float,
+                            birim=g.get('metrics', {}).get('unit', ''),
+                            evidence_justification=g.get('evidence_justification', 'Gerekçe Yok'),
+                            hedef_yonu=g.get('metrics', {}).get('direction', 'Artan'),
+                            is_locked=False,
+                            approval_status='Draft',
+                            admin_approval_status='Taslak',
+                            version_no=goal_set.get("version", 1),
+                            vision_text=manager_vision,
+                            vision_ambition_level=decoded_vision.get("ambition_level"),
+                            vision_stretch_factor=decoded_vision.get("stretch_factor")
+                        )
+                        _lsess.add(new_draft)
+                        _lsess.flush()
+                        g['id'] = new_draft.id # ID'yi JSON'a göm
+                        
+                    _lsess.commit()
+                    _lsess.close()
+                    
+                    st.session_state.current_goal_set = goal_set
                 
                 # Uretilen hedefleri asistan sekmesine de düşür
                 if goal_set and "error" not in goal_set:
@@ -595,252 +802,272 @@ with tab2:
                 )
                 render_devils_advocate_warning(da_result)
 
-            st.markdown(analyzer.format_goal_set(gs))
+            st.markdown("### Üretilen Hedefler (Ön İnceleme ve Kilitleme)")
+            st.info("Aşağıdaki hedefleri sisteme kaydetmeden önce tek tek inceleyebilir, **Manuel** veya **Yapay Zeka** ile revize edebilir ve hazır olduğunda onaylayıp kilitleyebilirsiniz.")
+            
+            # Hedef Kartları Döngüsü
+            all_locked = True
+            for idx, g in enumerate(gs.get("goals", [])):
+                is_goal_locked = g.get('is_locked', False)
+                if not is_goal_locked:
+                    all_locked = False
+                    
+                if is_goal_locked:
+                    with st.expander(f"✅ [KİLİTLENDİ] {g.get('title', f'Hedef {idx+1}')} - {g.get('metrics', {}).get('target_value', '')}", expanded=False):
+                        st.success("Bu hedef başarıyla kilitlendi ve onay sürecine eklendi.")
+                        st.markdown(f"**SMART Hedef:** {g.get('smart_goal')}")
+                        st.markdown(f"**Değer:** {g.get('metrics', {}).get('target_value')} {g.get('metrics', {}).get('unit')}")
+                else:
+                    with st.expander(f"📝 {g.get('title', f'Hedef {idx+1}')}", expanded=True):
+                        st.markdown(f"**SMART Hedef:** {g.get('smart_goal')}")
+                        val = g.get('metrics', {}).get('target_value', 0)
+                        unit = g.get('metrics', {}).get('unit', '')
+                        direction = g.get('metrics', {}).get('direction', 'Artan')
+                        st.markdown(f"**Değer:** {val} {unit} (Yön: {direction})")
+                        st.markdown(f"**Gerekçe:** {g.get('evidence_justification', '')}")
+                        
+                        st.markdown("---")
+                        tab_manual, tab_ai = st.tabs(["🛠️ Manuel Revizyon", "🤖 AI Danışman"])
+                        
+                        with tab_manual:
+                            with st.form(f"manual_edit_pre_{idx}"):
+                                new_smart = st.text_area("SMART Hedef Cümlesi", value=g.get('smart_goal', ''))
+                                try:
+                                    current_val = float(str(val).replace(',', '.'))
+                                except:
+                                    current_val = 0.0
+                                new_val = st.number_input("Hedef Değeri", value=current_val)
+                                
+                                if st.form_submit_button("💾 Manuel Değişikliği Uygula"):
+                                    gs["goals"][idx]["smart_goal"] = new_smart
+                                    gs["goals"][idx]["metrics"]["target_value"] = new_val
+                                    
+                                    if "id" in gs["goals"][idx]:
+                                        from src.auth import get_db_session
+                                        from src.models import AnnualGoals
+                                        _lsess = get_db_session()
+                                        _dg = _lsess.query(AnnualGoals).filter(AnnualGoals.id == gs["goals"][idx]["id"]).first()
+                                        if _dg:
+                                            _dg.smart_hedef = new_smart
+                                            _dg.hedef_degeri = float(new_val)
+                                            _lsess.commit()
+                                        _lsess.close()
+                                        
+                                    st.session_state.current_goal_set = gs
+                                    st.success("Değişiklik geçici belleğe alındı. Sisteme kaydetmek için aşağıdaki 'Kilitle ve Kaydet' butonuna basın.")
+                                    st.rerun()
+                                    
+                        with tab_ai:
+                            # Sohbet seçimi
+                            from src.data_loader import DataLoader
+                            loader_ai_pre = DataLoader()
+                            u_sicil_pre = st.session_state.get('user_id')
+                            sessions_ai_pre = loader_ai_pre.get_chat_sessions(u_sicil_pre, emp_sicil_for_lock, target_type)
+                            
+                            sess_options_pre = {"new": "🆕 Yeni Sohbet Başlat"}
+                            for s in sessions_ai_pre:
+                                sess_options_pre[s['id']] = f"📝 {s['title']} ({s['updated_at'].strftime('%d.%m %H:%M')})"
+                                
+                            selected_sess_key_pre = st.selectbox("Hedef ve revizyon isteği hangi sohbete aktarılsın?", options=list(sess_options_pre.keys()), format_func=lambda x: sess_options_pre[x], key=f"sess_sel_pre_{idx}")
+                            
+                            st.markdown("##### 💬 Hedef Hakkında Soru Sor")
+                            ai_question = st.text_area("Bu hedefle ilgili sormak istediğiniz bir şey veya tavsiye isteğiniz var mı?", key=f"ai_q_pre_{idx}", height=68)
+                            
+                            col_q_btn, col_q_chat = st.columns([1, 1])
+                            with col_q_btn:
+                                if st.button("💬 Soru Sor", key=f"ai_ask_btn_pre_{idx}", use_container_width=True):
+                                    if not ai_question.strip():
+                                        st.error("Lütfen bir soru girin.")
+                                    else:
+                                        with st.spinner("AI yanıtlıyor..."):
+                                            prompt = f"Şu anki hedef: '{g.get('smart_goal')}' (Değer: {val} {unit}). Soru: {ai_question}"
+                                            resp = analyzer.llm_client.generate_response(system_prompt="Sen bir İK ve performans hedefi danışmanısın. Yöneticiye hedefler konusunda tavsiyeler ver. Yanıtlarında sadece metin dön.", user_prompt=prompt)
+                                            
+                                            import datetime
+                                            now = datetime.datetime.now()
+                                            user_chat_msg = f"Soru:\nHedef: '{g.get('smart_goal')}'\nSorum: {ai_question}"
+                                            bot_chat_msg = resp
+                                            
+                                            if u_sicil_pre and emp_sicil_for_lock:
+                                                if selected_sess_key_pre == "new":
+                                                    title = f"{target_type} Sohbeti"
+                                                    sess_id = loader_ai_pre.create_chat_session(u_sicil_pre, emp_sicil_for_lock, target_type, title)
+                                                else:
+                                                    sess_id = selected_sess_key_pre
+                                                    
+                                                loader_ai_pre.save_chat_message(u_sicil_pre, emp_sicil_for_lock, target_type, "user", user_chat_msg, session_id=sess_id)
+                                                loader_ai_pre.save_chat_message(u_sicil_pre, emp_sicil_for_lock, target_type, "bot", bot_chat_msg, session_id=sess_id)
+                                                
+                                                st.session_state.active_session_id = sess_id
+                                                st.session_state.chat_history = loader_ai_pre.get_chat_history(sess_id)
+                                                
+                                            st.success("✨ Yanıtınız seçtiğiniz sohbete eklendi! Okuya bilmek için 'Sohbete Git' diyebilirsiniz.")
+                            with col_q_chat:
+                                if st.button("💬 Sohbete (Asistan) Git ", key=f"go_chat_q_pre_{idx}", use_container_width=True):
+                                    st.info("Lütfen sol üstteki '💬 Asistan' sekmesine tıklayarak sohbete geçiş yapın.")
+                                    
+                            st.markdown("---")
+                            st.markdown("##### ✨ Hedefi Revize Et")
+                            ai_req = st.text_area("Hedefi güncelleyecek JSON çıktısı almak için AI'a talimat verin:", key=f"ai_req_pre_{idx}", height=68)
+                            
+                            col_btn1_pre, col_btn2_pre = st.columns([1, 1])
+                            with col_btn1_pre:
+                                ai_btn_clicked_pre = st.button("✨ AI'dan Revizyon İste", key=f"ai_btn_pre_{idx}", use_container_width=True)
+                            with col_btn2_pre:
+                                if st.button("💬 Sohbete (Asistan) Git", key=f"go_chat_pre_{idx}", use_container_width=True):
+                                    st.info("Lütfen sol üstteki '💬 Asistan' sekmesine tıklayarak sohbete geçiş yapın.")
+                            
+                            if ai_btn_clicked_pre:
+                                if not ai_req.strip():
+                                    st.error("Lütfen bir istek girin.")
+                                else:
+                                    with st.spinner("AI hedefinizi revize ediyor..."):
+                                        prompt = f"Şu anki hedef: '{g.get('smart_goal')}' (Değer: {val} {unit}). Yönetici talebi: '{ai_req}'. Lütfen {analyzer.version} standartlarına uygun olarak hedefi güncelle ve sadece yeni SMART cümle ile yeni sayısal değeri içeren JSON dön: {{'smart_hedef': '...', 'hedef_degeri': 0.0}}"
+                                        resp = analyzer.llm_client.generate_response(system_prompt="Sen AI hedef revizyon asistanısın. Kurallara uygun JSON dön.", user_prompt=prompt, json_mode=True)
+                                        import json
+                                        try:
+                                            resp_json = json.loads(resp)
+                                            st.session_state[f'ai_suggest_pre_{idx}'] = resp_json
+                                            
+                                            import datetime
+                                            now = datetime.datetime.now()
+                                            
+                                            user_chat_msg = f"Revizyon Talebim:\nMevcut Hedef: '{g.get('smart_goal')}'\nİsteğim: {ai_req}"
+                                            bot_chat_msg = f"Sizin için hedefi şu şekilde revize ettim:\n\n**Yeni SMART Hedef:** {resp_json.get('smart_hedef')}\n**Yeni Değer:** {resp_json.get('hedef_degeri')}\n\nEğer bu revizyonu beğendiyseniz 'Uygula' diyerek geçici belleğe alabilirsiniz."
+                                            
+                                            if u_sicil_pre and emp_sicil_for_lock:
+                                                if selected_sess_key_pre == "new":
+                                                    title = f"{target_type} Revizyonu"
+                                                    sess_id = loader_ai_pre.create_chat_session(u_sicil_pre, emp_sicil_for_lock, target_type, title)
+                                                else:
+                                                    sess_id = selected_sess_key_pre
+                                                    
+                                                loader_ai_pre.save_chat_message(u_sicil_pre, emp_sicil_for_lock, target_type, "user", user_chat_msg, session_id=sess_id)
+                                                loader_ai_pre.save_chat_message(u_sicil_pre, emp_sicil_for_lock, target_type, "bot", bot_chat_msg, session_id=sess_id)
+                                                
+                                                st.session_state.active_session_id = sess_id
+                                                st.session_state.chat_history = loader_ai_pre.get_chat_history(sess_id)
+                                                
+                                            st.success("✨ AI önerisi hazır! Yanıt seçtiğiniz sohbete eklendi. Konuşmaya devam etmek için 'Sohbete Git' butonunu kullanabilirsiniz.")
+                                        except:
+                                            st.error("AI yanıtı JSON olarak alınamadı.")
+                                            
+                            if st.session_state.get(f'ai_suggest_pre_{idx}'):
+                                ai_sug = st.session_state[f'ai_suggest_pre_{idx}']
+                                st.info(f"**AI Önerisi:**\n\nSMART Hedef: {ai_sug.get('smart_hedef')}\nDeğer: {ai_sug.get('hedef_degeri')}")
+                                if st.button("✅ AI Önerisini Uygula", key=f"ai_approve_pre_{idx}", type="primary"):
+                                    gs["goals"][idx]["smart_goal"] = ai_sug.get('smart_hedef')
+                                    gs["goals"][idx]["metrics"]["target_value"] = ai_sug.get('hedef_degeri')
+                                    
+                                    if "id" in gs["goals"][idx]:
+                                        from src.auth import get_db_session
+                                        from src.models import AnnualGoals
+                                        _lsess = get_db_session()
+                                        _dg = _lsess.query(AnnualGoals).filter(AnnualGoals.id == gs["goals"][idx]["id"]).first()
+                                        if _dg:
+                                            _dg.smart_hedef = ai_sug.get('smart_hedef')
+                                            try:
+                                                _dg.hedef_degeri = float(ai_sug.get('hedef_degeri'))
+                                            except:
+                                                pass
+                                            _lsess.commit()
+                                        _lsess.close()
+                                        
+                                    st.session_state.current_goal_set = gs
+                                    del st.session_state[f'ai_suggest_pre_{idx}']
+                                    st.success("AI önerisi geçici belleğe alındı. Sisteme kaydetmek için aşağıdaki 'Kilitle ve Kaydet' butonuna basın.")
+                                    st.rerun()
+                                    
+                        st.markdown("---")
+                        if st.button("🔒 Bu Hedefi Kilitle ve Sisteme Kaydet", key=f"lock_btn_{idx}", type="primary", use_container_width=True):
+                            try:
+                                from src.auth import get_db_session
+                                from src.models import AnnualGoals
+                                import datetime
+                                _lsess = get_db_session()
+                                
+                                if "id" in g:
+                                    _dg = _lsess.query(AnnualGoals).filter(AnnualGoals.id == g["id"]).first()
+                                    if _dg:
+                                        _dg.is_locked = True
+                                        _dg.approval_status = 'Locked'
+                                        _dg.admin_approval_status = 'Onay Bekliyor'
+                                        _dg.locked_by_sicil = st.session_state.get('user_id')
+                                        _dg.ai_status = "Kabul"
+                                        _lsess.commit()
+                                else:
+                                    current_year = datetime.datetime.now().year + 1
+                                    metric_val = str(g.get('metrics', {}).get('target_value', '0')).replace(',', '.')
+                                    try:
+                                        metric_float = float(metric_val)
+                                    except:
+                                        metric_float = 0.0
+                                        
+                                    decoded_v = st.session_state.get('decoded_vision', {})
+                                    
+                                    new_goal = AnnualGoals(
+                                        employee_sicil=emp_sicil_for_lock,
+                                        yil=current_year,
+                                        hedef_turu=target_type,
+                                        smart_hedef=g.get('smart_goal', ''),
+                                        hedef_degeri=metric_float,
+                                        birim=g.get('metrics', {}).get('unit', ''),
+                                        evidence_justification=g.get('evidence_justification', 'Gerekçe Yok'),
+                                        hedef_yonu=direction,
+                                        is_locked=True,
+                                        approval_status='Locked',
+                                        admin_approval_status='Onay Bekliyor',
+                                        locked_by_sicil=st.session_state.get('user_id'),
+                                        version_no=gs.get("version", 1),
+                                        ai_status="Kabul",
+                                        vision_text=manager_vision,
+                                        vision_ambition_level=decoded_v.get("ambition_level"),
+                                        vision_stretch_factor=decoded_v.get("stretch_factor")
+                                    )
+                                    _lsess.add(new_goal)
+                                    _lsess.commit()
+                                
+                                _lsess.close()
+                                
+                                # State güncellemesi
+                                gs["goals"][idx]["is_locked"] = True
+                                st.session_state.current_goal_set = gs
+                                
+                                st.cache_data.clear()
+                                st.success(f"✅ Hedef başarıyla kilitlendi!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Kilit uygulanamadı: {e}")
 
             if decoded_vision:
                 render_vision_traceability(gs, decoded_vision)
 
             with st.expander("📊 Karar Destek Sistemi (Açıklanabilir YZ)", expanded=True):
                 render_dss_metrics(dss_metrics, employee_name)
-
-            st.markdown("---")
-            col_act1, col_act2, col_act3 = st.columns(3)
-
-            with col_act1:
-                if st.button("🔍 Uygunluk Değerlendir", type="secondary"):
-                    with st.spinner("Analiz ediliyor..."):
-                        eval_res = analyzer.evaluate_goals(gs, employee_name, dss_metrics.get("risk_score"))
-                        st.session_state.eval_result = eval_res
-
-            with col_act2:
-                if st.button("✏️ Revizyon İste", use_container_width=True, disabled=is_disabled_by_lock):
-                    st.session_state.show_revision_input = True
-
-            with col_act3:
-                if st.button("✅ Onayla & Kilitle", type="primary", use_container_width=True):
-                    st.session_state.current_goal_set["status"] = "ACTIVE"
-                    
-                    # AI Telemetri: Onaylanan hedefleri DB'ye işaretle
-                    try:
-                        from src.auth import get_db_session
-                        from src.models import PerformanceHistory
-                        _sess = get_db_session()
-                        _records = _sess.query(PerformanceHistory).filter(
-                            PerformanceHistory.isim == employee_name
-                        ).all()
-                        for _r in _records:
-                            _r.is_ai_suggested = 'True'
-                            _r.ai_status = 'TAM_KABUL'
-                        _sess.commit()
-                        _sess.close()
-                    except Exception as _e:
-                        pass  # Telemetri hatası ana akışı durdurmasın
-                    
-                    st.success("✅ Hedef Seti onaylandı ve ACTIVE olarak işaretlendi.")
-
-            # Değerlendirme Sonucu
-            if st.session_state.eval_result:
-                er = st.session_state.eval_result
-                if "error" in er:
-                    st.error(f"Değerlendirme üretilemedi: {er.get('error')}")
-                    if st.button("Tekrar Dene"):
-                        st.session_state.eval_result = None
-                        st.rerun()
-                else:
-                    with st.expander("📊 Sistem Değerlendirmesi", expanded=True):
-                        col_e1, col_e2 = st.columns(2)
-                        with col_e1:
-                            st.metric("Uygunluk", "✅ Uygun" if er.get("is_appropriate") else "⚠️ Riskli")
-                        with col_e2:
-                            st.metric("Risk Skoru (DSS)", f"%{dss_metrics.get('risk_score', '?')}")
-                        st.write(f"**Analiz:** {er.get('analysis', '-')}")
-                        for s in er.get("improvement_suggestions", []):
-                            st.write(f"- {s}")
-                        if st.button("Kapat"):
-                            st.session_state.eval_result = None
-                            st.rerun()
-
-            # Revizyon Girişi
-            if st.session_state.get("show_revision_input"):
+                
+            if not all_locked:
                 st.markdown("---")
-                feedback = st.text_area(
-                    "Yönetici Geri Bildirimi",
-                    placeholder="Örn: Hedef 1'deki rakam çok agresif, %15'e çekelim."
-                )
-                col_rev1, col_rev2 = st.columns(2)
-                with col_rev1:
-                    if st.button("🚀 Revizyon Önerisi Üret", type="primary"):
-                        if not feedback.strip():
-                            st.error("Lütfen revizyon için bir geri bildirim girin.")
-                        else:
-                            with st.spinner("Patch hazırlanıyor..."):
-                                patch = analyzer.revise_goals(gs, feedback)
-                                st.session_state.proposed_patch = patch
-                                del st.session_state.show_revision_input
-                                st.rerun()
-                with col_rev2:
-                    if st.button("İptal Et"):
-                        del st.session_state.show_revision_input
-                        st.rerun()
+                st.warning("⚠️ Dikkat: Bu işlem, kilitlenmemiş (taslak) hedeflerinizi kalıcı olarak silecek ve yeni hedef üretme işlemini başlatacaktır.")
+                if st.button("🔄 Kilitlenmemiş Hedefleri Sıfırla ve Yeniden Öner", type="secondary", use_container_width=True):
+                    from src.auth import get_db_session
+                    from src.models import AnnualGoals
+                    _lsess = get_db_session()
+                    _lsess.query(AnnualGoals).filter(
+                        AnnualGoals.employee_sicil == emp_sicil_for_lock,
+                        AnnualGoals.hedef_turu == target_type,
+                        AnnualGoals.approval_status == 'Draft'
+                    ).delete()
+                    _lsess.commit()
+                    _lsess.close()
+                    st.session_state.current_goal_set = None
+                    st.success("Kilitlenmemiş hedefler başarıyla sıfırlandı. Yeni hedefler üretebilirsiniz.")
+                    st.rerun()
 
-            # Patch Onay / Red
-            if st.session_state.proposed_patch:
-                st.info("Sistem bir revizyon (PATCH) önerdi. Lütfen aşağıdan inceleyip onaylayın.")
-                st.markdown(analyzer.format_patch(st.session_state.proposed_patch, gs))
-                col_p1, col_p2 = st.columns(2)
-                with col_p1:
-                    if st.button("✔️ Revizyonu Onayla"):
-                        patch = st.session_state.proposed_patch
-                        for ch in patch.get("changes", []):
-                            idx = ch.get("goal_index", 0)
-                            field = ch.get("field", "")
-                            new_val = ch.get("new_value")
-                            if idx < len(gs["goals"]):
-                                if field == "title":
-                                    gs["goals"][idx]["title"] = new_val
-                                elif field == "smart_goal":
-                                    gs["goals"][idx]["smart_goal"] = new_val
-                                elif "metrics.target_value" in field:
-                                    gs["goals"][idx]["metrics"]["target_value"] = new_val
-                        gs["version"] = patch.get("proposed_version", gs.get("version", 1) + 1)
-                        gs["status"] = "ÖNERİLEN"
-                        st.session_state.current_goal_set = gs
-                        st.session_state.proposed_patch = None
-                        
-                        # AI Telemetri: (Tarihi verilere değil, memory'de tutulacak çünkü AnnualGoals'da kaydedilecek)
+            if all_locked:
+                st.success("🎉 Tüm hedefler başarıyla kilitlendi ve onay sürecine girdi. 'Atanan Hedefler' sekmesinden takip edebilirsiniz.")
 
-                        
-                        # Revize edilen hedefi chat'e at
-                        bot_msg = f"Hedefleriniz geri bildiriminiz doğrultusunda revize edildi (v{gs['version']}).\n\n"
-                        bot_msg += analyzer.format_goal_set(gs)
-                        
-                        user_prompt_txt = "Verdiğim geri bildirimi uygulayarak hedefleri revize et."
-                        u_sicil = st.session_state.get('user_id')
-                        e_sicil = employee_metadata.get('Sicil') if employee_metadata else None
-                        import datetime
-                        now = datetime.datetime.now()
-                        st.session_state.chat_history.append({"role": "user", "content": user_prompt_txt, "timestamp": now})
-                        st.session_state.chat_history.append({"role": "bot", "content": bot_msg, "timestamp": now})
-                        
-                        if u_sicil and e_sicil:
-                            from src.data_loader import DataLoader
-                            loader = DataLoader()
-                            
-                            if not st.session_state.get('active_session_id'):
-                                title = f"{target_type} Revizyonu"
-                                new_session_id = loader.create_chat_session(u_sicil, e_sicil, target_type, title)
-                                st.session_state.active_session_id = new_session_id
-                                
-                            sess_id = st.session_state.get('active_session_id')
-                            loader.save_chat_message(u_sicil, e_sicil, target_type, "user", user_prompt_txt, session_id=sess_id)
-                            loader.save_chat_message(u_sicil, e_sicil, target_type, "bot", bot_msg, session_id=sess_id)
-                        
-                        st.success("✅ Versiyon güncellendi!")
-                        st.rerun()
-                with col_p2:
-                    if st.button("❌ Revizyonu Reddet"):
-                        st.session_state.proposed_patch = None
-                        st.rerun()
 
-        # Kesinleştir Button
-        if current_role in ['Manager', 'Admin'] and not is_employee_locked:
-            st.markdown("---")
-            if emp_sicil_for_lock and st.session_state['user_id'] == emp_sicil_for_lock:
-                st.warning("⚠️ Kendi hedeflerinizi kesinleştiremezsiniz. Sadece yöneticiniz onaylayabilir.")
-            else:
-                if st.button("🔒 Tüm Hedefleri Kesinleştir (Kilitle)", type="primary"):
-                    try:
-                        from src.auth import get_db_session
-                        from src.models import AnnualGoals
-                        import datetime
-                        _lsess = get_db_session()
-                        
-                        # --- TELEMETRY CALCULATIONS ---
-                        import time
-                        import difflib
-                        
-                        duration = 0
-                        if st.session_state.get('ai_start_time'):
-                            duration = int(time.time() - st.session_state.ai_start_time)
-                            duration = min(duration, 3600)  # Max 1 hour outlier clamp
-                            
-                        # 1. Eski AnnualGoals kayıtlarını pasife çek (aynı sicil+kategori için)
-                        old_goals = _lsess.query(AnnualGoals).filter(
-                            AnnualGoals.employee_sicil == emp_sicil_for_lock,
-                            AnnualGoals.hedef_turu == target_type,
-                            AnnualGoals.approval_status != 'Passive'
-                        ).all()
-                        for og in old_goals:
-                            og.approval_status = 'Passive'
-                            og.is_locked = False
-                        
-                        # 2. Yeni hedefleri insert et
-                        gs_data = st.session_state.current_goal_set
-                        current_year = datetime.datetime.now().year + 1
-                        
-                        for idx, g in enumerate(gs_data.get("goals", [])):
-                            metric_val = str(g.get('metrics', {}).get('target_value', '0')).replace(',', '.')
-                            try:
-                                metric_float = float(metric_val)
-                            except:
-                                metric_float = 0.0
-                                
-                            # Text diff
-                            orig_text = ""
-                            if st.session_state.get('original_goal_set') and len(st.session_state.original_goal_set.get("goals", [])) > idx:
-                                orig_text = st.session_state.original_goal_set["goals"][idx].get("smart_goal", "")
-                                
-                            final_text = g.get('smart_goal', '')
-                            
-                            diff_pct = 0.0
-                            if orig_text and final_text:
-                                similarity = difflib.SequenceMatcher(None, orig_text, final_text).ratio()
-                                diff_pct = (1.0 - similarity) * 100.0
-                                
-                            ai_status = "Manuel"
-                            if st.session_state.get('original_goal_set'):
-                                ai_status = "Kabul" if diff_pct == 0.0 else "Revize"
-                                
-                            decoded_v = st.session_state.get('decoded_vision', {})
-                                
-                            new_goal = AnnualGoals(
-                                employee_sicil=emp_sicil_for_lock,
-                                yil=current_year,
-                                hedef_turu=target_type,
-                                smart_hedef=final_text,
-                                hedef_degeri=metric_float,
-                                birim=g.get('metrics', {}).get('unit', ''),
-                                evidence_justification=g.get('evidence_justification', 'Gerekçe Yok'),
-                                hedef_yonu=g.get('metrics', {}).get('direction', 'Artan'),
-                                is_locked=True,
-                                approval_status='Locked',
-                                parent_goal_id=st.session_state.get('revision_parent_goal_id'),
-                                locked_by_sicil=st.session_state.get('user_id'),
-                                version_no=gs_data.get("version", 1),
-                                ai_status=ai_status,
-                                decision_duration=duration,
-                                revision_depth=diff_pct,
-                                regen_count=st.session_state.get('regen_count', 0),
-                                chat_interaction_count=st.session_state.get('chat_interaction_count', 0),
-                                vision_text=manager_vision,
-                                vision_ambition_level=decoded_v.get("ambition_level"),
-                                vision_stretch_factor=decoded_v.get("stretch_factor")
-                            )
-                            _lsess.add(new_goal)
-                            
-                        _lsess.commit()
-                        _lsess.close()
-                        
-                        st.cache_data.clear() # Cache invalidation
-                        
-                        # Revizyon durumunu temizle
-                        st.session_state.revision_parent_goal_id = None
-                        
-                        st.success(f"✅ {employee_name} için {target_type} hedefleri KİLİTLENDİ.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Kilit uygulanamadı: {e}")
-        elif current_role == 'Admin' and is_employee_locked:
+        if current_role == 'Admin' and is_employee_locked:
             st.markdown("---")
             if st.button("🔓 Kilidi Aç (Sadece Admin)"):
                 try:
@@ -1008,7 +1235,13 @@ with tab4:
                         _rc[0].markdown(f'<div class="excel-table-row">{_yil}</div>', unsafe_allow_html=True)
                         _rc[1].markdown(f'<div class="excel-table-row">{_tur}</div>', unsafe_allow_html=True)
                         _rc[2].markdown(f'<div class="excel-table-row">{_arrow} {_yon}</div>', unsafe_allow_html=True)
-                        _rc[3].markdown(f'<div class="excel-table-row">{_smart}</div>', unsafe_allow_html=True)
+                        
+                        _smart_html = str(_smart)
+                        if getattr(_goal, 'is_revised', False):
+                            _rev_date = _goal.revised_at.strftime('%d.%m.%Y') if _goal.revised_at else ""
+                            _smart_html += f'<br/><span style="background-color: #fef08a; color: #854d0e; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; margin-top: 4px; display: inline-block;">Revize Edildi - {_rev_date}</span>'
+                            
+                        _rc[3].markdown(f'<div class="excel-table-row">{_smart_html}</div>', unsafe_allow_html=True)
                         _rc[4].markdown(f'<div class="excel-table-row">{_prev_val}</div>', unsafe_allow_html=True)
                         _rc[5].markdown(f'<div class="excel-table-row"><b>{_hedef_val}</b></div>', unsafe_allow_html=True)
                         _rc[6].markdown(f'<div class="excel-table-row">{_change_str}</div>', unsafe_allow_html=True)
@@ -1064,23 +1297,162 @@ with tab4:
                                         st.caption("Henüz bir iletişim kaydı yok.")
                                         
                                     if current_role == 'Manager' and not is_approved_tab:
+                                        st.markdown("#### 🛠️ Hedef Revizyonu (Editör Modu)")
                                         with st.form(f"manager_audit_form_{_goal.id}"):
-                                            mgr_msg = st.text_area("Admin'e Yanıt Yaz", placeholder="Örn: Bu hedef revizyon isteğine istinaden düzenlendi.")
-                                            if st.form_submit_button("Gönder"):
-                                                if mgr_msg.strip():
+                                            new_smart = st.text_area("Yeni SMART Hedef Cümlesi", value=_goal.smart_hedef)
+                                            new_val = st.number_input("Yeni Hedef Değeri", value=float(_goal.hedef_degeri) if _goal.hedef_degeri else 0.0)
+                                            mgr_msg = st.text_area("Admin'e Yanıt / Revizyon Notu (İsteğe Bağlı)", placeholder="Revizyon yaptıysanız gerekçesini ekleyebilirsiniz.")
+                                            
+                                            if st.form_submit_button("💾 Revizyonu ve Yanıtı Kaydet"):
+                                                val_res = analyzer.validate_manual_revision(_goal.hedef_degeri, new_val, getattr(_goal, 'hedef_yonu', 'Artan'))
+                                                if not val_res["valid"]:
+                                                    st.error(val_res["error"])
+                                                else:
                                                     import datetime
                                                     now_str = datetime.datetime.now().isoformat()
-                                                    new_log = {"role": "Manager", "content": mgr_msg.strip(), "timestamp": now_str}
-                                                    if isinstance(logs, list):
-                                                        logs.append(new_log)
-                                                    else:
-                                                        logs = [new_log]
-                                                    _goal.denetim_loglari = list(logs)
-                                                    from sqlalchemy.orm.attributes import flag_modified
-                                                    flag_modified(_goal, "denetim_loglari")
-                                                    _goal.admin_approval_status = 'Onay Bekliyor'
+                                                    
+                                                    # Log kaydını hazırla
+                                                    if mgr_msg.strip():
+                                                        new_log = {"role": "Manager", "content": mgr_msg.strip(), "timestamp": now_str}
+                                                        if isinstance(logs, list):
+                                                            logs.append(new_log)
+                                                        else:
+                                                            logs = [new_log]
+                                                    
+                                                    # Eski veriyi pasife çek, yenisini insert et
+                                                    _goal.approval_status = 'Passive'
+                                                    _goal.is_locked = False
+                                                    
+                                                    new_goal = AnnualGoals(
+                                                        employee_sicil=_goal.employee_sicil,
+                                                        yil=_goal.yil,
+                                                        hedef_turu=_goal.hedef_turu,
+                                                        smart_hedef=new_smart,
+                                                        hedef_degeri=new_val,
+                                                        birim=_goal.birim,
+                                                        evidence_justification=_goal.evidence_justification,
+                                                        hedef_yonu=_goal.hedef_yonu,
+                                                        is_locked=True,
+                                                        approval_status='Locked',
+                                                        admin_approval_status='Onay Bekliyor',
+                                                        parent_goal_id=_goal.id,
+                                                        locked_by_sicil=st.session_state.get('user_id'),
+                                                        version_no=_goal.version_no + 1,
+                                                        ai_status='Manuel',
+                                                        denetim_loglari=list(logs),
+                                                        is_revised=True,
+                                                        revised_at=datetime.datetime.now(),
+                                                        revision_source='Manual'
+                                                    )
+                                                    _asess.add(new_goal)
                                                     _asess.commit()
-                                                    st.success("Mesajınız Admin'e iletildi.")
+                                                    st.cache_data.clear()
+                                                    st.success("✅ Revizyon başarıyla kaydedildi ve onaya gönderildi.")
+                                                    st.rerun()
+
+                                        st.markdown("#### 🤖 AI Danışman (Deep Context)")
+                                        
+                                        # Sohbet seçimi
+                                        from src.data_loader import DataLoader
+                                        loader_ai = DataLoader()
+                                        u_sicil = st.session_state.get('user_id')
+                                        e_sicil_ai = _goal.employee_sicil
+                                        sessions_ai = loader_ai.get_chat_sessions(u_sicil, e_sicil_ai, _goal.hedef_turu)
+                                        
+                                        sess_options = {"new": "🆕 Yeni Sohbet Başlat"}
+                                        for s in sessions_ai:
+                                            sess_options[s['id']] = f"📝 {s['title']} ({s['updated_at'].strftime('%d.%m %H:%M')})"
+                                            
+                                        selected_sess_key = st.selectbox("Hedef ve revizyon isteği hangi sohbete aktarılsın?", options=list(sess_options.keys()), format_func=lambda x: sess_options[x], key=f"sess_sel_{_goal.id}")
+                                        
+                                        ai_req = st.text_input("Hedef için AI'dan ne istiyorsunuz?", placeholder="Örn: Bu hedefi daha vizyoner bir dille yaz.", key=f"ai_req_{_goal.id}")
+                                        
+                                        col_btn1, col_btn2 = st.columns([1, 1])
+                                        with col_btn1:
+                                            ai_btn_clicked = st.button("✨ AI'dan Revizyon İste", key=f"ai_btn_{_goal.id}", use_container_width=True)
+                                        with col_btn2:
+                                            if st.button("💬 Sohbete (Asistan) Git", key=f"go_chat_{_goal.id}", use_container_width=True):
+                                                st.info("Lütfen sol üstteki '💬 Asistan' sekmesine tıklayarak sohbete geçiş yapın.")
+                                        
+                                        if ai_btn_clicked:
+                                            if not ai_req.strip():
+                                                st.error("Lütfen AI'dan ne istediğinizi yazın.")
+                                            else:
+                                                with st.spinner("AI hedefinizi revize ediyor..."):
+                                                    prompt = f"Şu anki hedef: '{_goal.smart_hedef}' (Değer: {_goal.hedef_degeri} {_goal.birim}). Yönetici talebi: '{ai_req}'. Lütfen {analyzer.version} standartlarına uygun olarak hedefi güncelle ve sadece yeni SMART cümle ile yeni sayısal değeri içeren JSON dön: {{'smart_hedef': '...', 'hedef_degeri': 0.0}}"
+                                                    resp = analyzer.llm_client.generate_response(system_prompt="Sen AI hedef revizyon asistanısın. Kurallara uygun JSON dön.", user_prompt=prompt, json_mode=True)
+                                                    import json
+                                                    try:
+                                                        resp_json = json.loads(resp)
+                                                        st.session_state[f'ai_suggest_{_goal.id}'] = resp_json
+                                                        
+                                                        import datetime
+                                                        now = datetime.datetime.now()
+                                                        
+                                                        user_chat_msg = f"Revizyon Talebim:\nMevcut Hedef: '{_goal.smart_hedef}'\nİsteğim: {ai_req}"
+                                                        bot_chat_msg = f"Sizin için hedefi şu şekilde revize ettim:\n\n**Yeni SMART Hedef:** {resp_json.get('smart_hedef')}\n**Yeni Değer:** {resp_json.get('hedef_degeri')}\n\nEğer bu revizyonu beğendiyseniz 'Atanan Hedefler' sekmesinden onaylayabilir veya buradan bana geri bildirim vermeye devam edebilirsiniz."
+                                                        
+                                                        if u_sicil and e_sicil_ai:
+                                                            if selected_sess_key == "new":
+                                                                title = f"{_goal.hedef_turu} Revizyonu"
+                                                                sess_id = loader_ai.create_chat_session(u_sicil, e_sicil_ai, _goal.hedef_turu, title)
+                                                            else:
+                                                                sess_id = selected_sess_key
+                                                                
+                                                            loader_ai.save_chat_message(u_sicil, e_sicil_ai, _goal.hedef_turu, "user", user_chat_msg, session_id=sess_id)
+                                                            loader_ai.save_chat_message(u_sicil, e_sicil_ai, _goal.hedef_turu, "bot", bot_chat_msg, session_id=sess_id)
+                                                            
+                                                            st.session_state.active_session_id = sess_id
+                                                            st.session_state.chat_history = loader_ai.get_chat_history(sess_id)
+                                                            
+                                                        st.success("✨ AI önerisi hazır! Yanıt seçtiğiniz sohbete eklendi. Konuşmaya devam etmek için 'Sohbete Git' butonunu kullanabilirsiniz.")
+                                                    except:
+                                                        st.error("AI yanıtı JSON olarak alınamadı.")
+                                                    
+                                        if st.session_state.get(f'ai_suggest_{_goal.id}'):
+                                            ai_sug = st.session_state[f'ai_suggest_{_goal.id}']
+                                            st.info(f"**AI Önerisi:**\n\nSMART Hedef: {ai_sug.get('smart_hedef')}\nDeğer: {ai_sug.get('hedef_degeri')}")
+                                            if st.button("✅ AI Önerisini Onayla ve Kaydet (Human Oversight)", key=f"ai_approve_{_goal.id}", type="primary"):
+                                                val_res = analyzer.validate_manual_revision(_goal.hedef_degeri, ai_sug.get('hedef_degeri', _goal.hedef_degeri), getattr(_goal, 'hedef_yonu', 'Artan'))
+                                                if not val_res["valid"]:
+                                                    st.error(f"AI Önerisi kısıtlamalara takıldı: {val_res['error']}")
+                                                else:
+                                                    import datetime
+                                                    now_str = datetime.datetime.now().isoformat()
+                                                    ai_msg = "AI Danışman önerisi kabul edildi ve hedef revize edildi."
+                                                    new_log = {"role": "Manager", "content": ai_msg, "timestamp": now_str}
+                                                    if isinstance(logs, list): logs.append(new_log)
+                                                    else: logs = [new_log]
+
+                                                    _goal.approval_status = 'Passive'
+                                                    _goal.is_locked = False
+                                                    
+                                                    new_goal = AnnualGoals(
+                                                        employee_sicil=_goal.employee_sicil,
+                                                        yil=_goal.yil,
+                                                        hedef_turu=_goal.hedef_turu,
+                                                        smart_hedef=ai_sug.get('smart_hedef', _goal.smart_hedef),
+                                                        hedef_degeri=val_res['clamped_value'],
+                                                        birim=_goal.birim,
+                                                        evidence_justification=_goal.evidence_justification,
+                                                        hedef_yonu=_goal.hedef_yonu,
+                                                        is_locked=True,
+                                                        approval_status='Locked',
+                                                        admin_approval_status='Onay Bekliyor',
+                                                        parent_goal_id=_goal.id,
+                                                        locked_by_sicil=st.session_state.get('user_id'),
+                                                        version_no=_goal.version_no + 1,
+                                                        ai_status='Revize',
+                                                        denetim_loglari=list(logs),
+                                                        is_revised=True,
+                                                        revised_at=datetime.datetime.now(),
+                                                        revision_source='AI-Assisted'
+                                                    )
+                                                    _asess.add(new_goal)
+                                                    _asess.commit()
+                                                    st.cache_data.clear()
+                                                    del st.session_state[f'ai_suggest_{_goal.id}']
+                                                    st.success("✅ AI Revizyonu başarıyla kaydedildi ve onaya gönderildi.")
                                                     st.rerun()
     
                         _export_rows.append({

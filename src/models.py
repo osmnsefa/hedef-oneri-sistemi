@@ -91,6 +91,11 @@ class AnnualGoals(Base):
     vision_ambition_level = Column(String, nullable=True)      # Zayıf | Dengeli | Agresif
     vision_stretch_factor = Column(Float, nullable=True)       # 0.0 – 1.0
 
+    # Revizyon ve İzlenebilirlik (Traceability)
+    is_revised = Column(Boolean, default=False)
+    revised_at = Column(DateTime, nullable=True)
+    revision_source = Column(String, nullable=True)            # 'Manual' veya 'AI-Assisted'
+
     # İlişki
     employee = relationship('Employee', back_populates='annual_goals')
 

@@ -497,9 +497,33 @@ def render_admin_dashboard():
                         status_color = "green" if g.admin_approval_status == 'Onaylandı' else "orange" if g.admin_approval_status == 'Revizyon Bekliyor' else "blue"
                         with st.expander(f"📌 {emp.first_name} {emp.last_name} | {g.hedef_turu} | Durum: {g.admin_approval_status}"):
                             st.markdown(f"**Atayan Yönetici Sicili:** `{g.locked_by_sicil}`")
-                            st.markdown(f"**SMART Hedef:** {g.smart_hedef}")
-                            st.markdown(f"**Hedef Değeri:** {g.hedef_degeri} {g.birim}")
                             
+                            if getattr(g, 'is_revised', False) and getattr(g, 'parent_goal_id', None):
+                                # Eski hedefi bul
+                                old_g = session.query(AnnualGoals).filter(AnnualGoals.id == g.parent_goal_id).first()
+                                if old_g:
+                                    st.markdown("##### 🔍 Revizyon Karşılaştırması (Eski vs Yeni)")
+                                    rev_src = getattr(g, 'revision_source', 'Bilinmiyor')
+                                    rev_dt = getattr(g, 'revised_at', None)
+                                    rev_dt_str = rev_dt.strftime('%d.%m.%Y %H:%M') if rev_dt else "-"
+                                    st.caption(f"**Revizyon Kaynağı:** {rev_src} | **Tarih:** {rev_dt_str}")
+                                    
+                                    col_old, col_new = st.columns(2)
+                                    with col_old:
+                                        st.error("**Eski Hedef (v{})**".format(old_g.version_no))
+                                        st.info(f"**SMART Hedef:** {old_g.smart_hedef}")
+                                        st.info(f"**Değer:** {old_g.hedef_degeri} {old_g.birim}")
+                                    with col_new:
+                                        st.success("**Yeni Hedef (v{})**".format(g.version_no))
+                                        st.info(f"**SMART Hedef:** {g.smart_hedef}")
+                                        st.info(f"**Değer:** {g.hedef_degeri} {g.birim}")
+                                else:
+                                    st.markdown(f"**SMART Hedef:** {g.smart_hedef}")
+                                    st.markdown(f"**Hedef Değeri:** {g.hedef_degeri} {g.birim}")
+                            else:
+                                st.markdown(f"**SMART Hedef:** {g.smart_hedef}")
+                                st.markdown(f"**Hedef Değeri:** {g.hedef_degeri} {g.birim}")
+                                
                             st.markdown("---")
                             st.markdown("##### 📜 İletişim Geçmişi (Audit Trail)")
                             
@@ -540,26 +564,30 @@ def render_admin_dashboard():
                                         
                                     if btn_approve or btn_revise:
                                         now_str = datetime.datetime.now().isoformat()
-                                        if new_msg.strip():
-                                            new_log = {"role": "Admin", "content": new_msg.strip(), "timestamp": now_str}
-                                            if isinstance(logs, list):
-                                                logs.append(new_log)
-                                            else:
-                                                logs = [new_log]
-                                            g.denetim_loglari = list(logs)
-                                            from sqlalchemy.orm.attributes import flag_modified
-                                            flag_modified(g, "denetim_loglari")
                                         
                                         if btn_approve:
-                                            g.admin_approval_status = 'Onaylandı'
-                                            session.commit()
-                                            st.cache_data.clear() # Cache invalidation
-                                            st.success("Hedef onaylandı!")
-                                            st.rerun()
+                                            if new_msg.strip():
+                                                st.error("⚠️ Hedefi ONAYLARKEN mesaj bırakamazsınız. Eğer yazdığınız mesaja istinaden bir revizyon istiyorsanız lütfen '🔄 Revizyon İste' butonuna tıklayınız.")
+                                            else:
+                                                g.admin_approval_status = 'Onaylandı'
+                                                session.commit()
+                                                st.cache_data.clear() # Cache invalidation
+                                                st.success("Hedef onaylandı!")
+                                                st.rerun()
+                                                
                                         elif btn_revise:
                                             if not new_msg.strip():
                                                 st.error("Revizyon istemek için lütfen bir not giriniz.")
                                             else:
+                                                new_log = {"role": "Admin", "content": new_msg.strip(), "timestamp": now_str}
+                                                if isinstance(logs, list):
+                                                    logs.append(new_log)
+                                                else:
+                                                    logs = [new_log]
+                                                g.denetim_loglari = list(logs)
+                                                from sqlalchemy.orm.attributes import flag_modified
+                                                flag_modified(g, "denetim_loglari")
+                                                
                                                 g.admin_approval_status = 'Revizyon Bekliyor'
                                                 session.commit()
                                                 st.cache_data.clear() # Cache invalidation

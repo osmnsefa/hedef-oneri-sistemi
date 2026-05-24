@@ -1,0 +1,69 @@
+Veri hazırlığı için parser yazılması
+Model yüklenmesi ve parametrelerin ayarlanması.
+Agentların oluşturulması ve görevlerine ait promptların yazılması
+Gradio ile arayüz
+Önce yöneticinin ismi ile kimlik doğrulaması yapılır. Databasede böyle biri var mı?
+Hangi çalışana hedef atayacağı bilgisi alınır.
+Hangi hedef türünde hedef ataması yapacağı seçtirilir.4 hedef türü vardır.
+Yöneticinin 2026 hedefi sorulur ve bu hedefler ve çalışanın seçilen hedef türüne ait geçmiş verileri, görev tanımları ve varsa yönetici geri bildirimleri göz önüne alınarak 3 tane smart hedef önerisinde bulunur.
+Daha sonra sohbetin devamında sohbet geçmişi ve çalışan verileri tutulur.Hedef önerisine dair kullanıcı geri bildirimiyle hedefler güncellenebilir.
+Her cevaptan sonra altta 2 tane buton çıkacak biri verilen hedef türüne ait sohbete devam mı edileceği yoksa aynı çalışana ait başka bir hedef türü seçimi butonu çıksın butona basıldığında 4 hedef türü butonu ortaya çıksın seçilen hedef türüne göre çalışanın geçmiş verileri, görev tanımları ve varsa yönetici geri bildirimleri göz önüne alınarak 3 tane smart hedef önerisinde bulunur.
+Ve sohbete devam edilir.
+🏗️ PROJE MİMARİSİ VE DATA PIPELINE (Uçtan Uca)
+0. SİSTEM ÖZETİ (High-Level Architecture)
+Sistem üç ana katmandan oluşur:
+Veri Katmanı (Data Layer): Ham dosyaların işlenip yapılandırıldığı yer.
+Zeka Katmanı (Intelligence Layer): Vektör veritabanı ve LLM'in (Beyin) olduğu yer.
+Uygulama Katmanı (Application Layer): Kullanıcının etkileşime girdiği Streamlit arayüzü.
+1. VERİ KATMANI: ETL (Extract, Transform, Load) SÜRECİ
+Veriyi "Anlaşılabilir Bilgiye" dönüştürme aşamasıdır. En çok eforu buraya harcayacağız.
+A. Veri Çıkarma (Extraction)
+Kaynak 1: Excel (Performans Geçmişi)
+pandas ile okunacak.
+Kritik İşlem: Bölüm ve Unvan kolonları birleştirilip "Composite Key" (Örn: "kalite mühendisi") oluşturulacak.
+Kaynak 2: Word (Görev Tanımları)
+python-docx ile okunacak.
+Regex ile başlıklar (2.1, 3.0 gibi) temizlenecek.
+Her unvan için "Ana Sorumluluklar" listesi çıkarılacak.
+Kaynak 3: Word (Geri Bildirimler)
+python-docx ile okunacak.
+Kişi bazlı ve Yıl bazlı olarak parçalanacak (Chunking).
+Özellikle "Gelecek Yıl Beklentileri" paragrafı ayrıştırılacak.
+B. Veri Dönüştürme & Birleştirme (Transformation & Merging)
+Master Data Oluşturma: Excel'deki her bir çalışan (Sicil No) için dev bir JSON objesi oluşturulacak.
+Zenginleştirme:
+Çalışanın Excel satırına -> Word'deki Görev Tanımı eklenecek.
+Çalışanın profiline -> Word'deki Son Yönetici Yorumu eklenecek.
+Metin Temizliği: "SMART Hedef Tanımı" içindeki gereksiz boşluklar ve özel karakterler temizlenecek.
+2. ZEKA KATMANI: RAG & VECTOR STORE
+Chatbot'un "hafızasının" oluşturulduğu yer.
+A. Embedding (Vektörleştirme)
+Model: sentence-transformers/all-MiniLM-L6-v2 (veya çok dilli bir model) kullanılacak. Bu model, metinleri sayısal koordinatlara (vektörlere) çevirir.
+Neyi Vektörleştiriyoruz?
+Geçmiş SMART Hedef Tanımları (Benzer işleri bulmak için).
+Görev Tanımı Maddeleri (Sorumlulukları anlamak için).
+B. Vector Database (Vektör Veritabanı)
+Teknoloji: ChromaDB (Colab için en uygun, hafif ve hızlı).
+Koleksiyonlar: Veriler Goals_Collection ve Profiles_Collection olarak saklanacak.
+Metadata: Her vektörün yanına {"department": "Kalite", "level": "Mühendis", "score": "Beklenen"} gibi etiketler yapıştırılacak. Bu, filtreleme yapmamızı sağlar.
+3. LLM ORKESTRASYONU (Logic Layer)
+Kullanıcı bir istekte bulunduğunda arka planda dönecek algoritma.
+Kullanıcı Girdisi: "Ayşe Kelek için Kalite bölümünde yeni bir İş Hedefi öner."
+Retrieval (Geri Çağırma):
+Sistem önce Ayşe'nin Görev Tanımını çeker.
+Sonra Ayşe'nin Yönetici Geri Bildirimini ("Disiplin sorunu var" vb.) çeker.
+Son olarak Vektör DB'den "Kalite Mühendisi" pozisyonunda geçmişte verilmiş en başarılı 5 hedefi getirir.
+Augmentation (Zenginleştirme):
+Tüm bu veriler dev bir Prompt içine yerleştirilir:
+"Sen uzman bir İK Yöneticisisin. Aşağıdaki görev tanımına ve yönetici yorumuna sahip çalışana, geçmişteki şu başarılı örnekleri referans alarak 3 tane yeni SMART hedef öner."
+Generation (Üretim):
+Google Gemini API bu prompt'u işler ve JSON formatında 3 hedef üretir.
+4. UYGULAMA KATMANI: UI (User Interface)
+Google Colab üzerinde çalışacak olan ön yüz.
+Framework: Streamlit
+Tünelleme: localtunnel veya ngrok (Colab'ı web'e açmak için).
+Akış:
+Login: Basit şifre ekranı.
+Dashboard: Sol panelde çalışan seçimi.
+Analiz Sekmesi: Seçilen kişinin "Performans Grafiği" ve "Sentiment Özeti".
+Chatbot Sekmesi: Hedef isteme ve onaylama alanı.

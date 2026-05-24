@@ -573,8 +573,8 @@ class Analyzer:
         return base
 
     def analyze_and_suggest(self, employee_name, target_type, manager_vision, history_text,
-                            sicil_no=None, employee_title=None, decoded_vision=None):
-        """v1 (BASELINE) Hedef Seti Üretimi - Tam olarak 3 SMART hedef"""
+                            sicil_no=None, employee_title=None, decoded_vision=None, goal_count=3):
+        """v1 (BASELINE) Hedef Seti Üretimi - Dinamik hedef sayısı (maks 3)"""
         
         # 1. VERİ KALİTE KONTROLÜ (Pre-processing Risk Layer)
         data_check = self.data_validator.validate_history(history_text)
@@ -640,7 +640,7 @@ class Analyzer:
 
         goal_set_uuid = str(uuid.uuid4())[:8]
         user_prompt = f"""
-        {employee_name} için '{target_type}' kategorisinde TAM OLARAK 3 ADET SMART hedef içeren v1 BASELINE hedef seti üret.
+        {employee_name} için '{target_type}' kategorisinde TAM OLARAK {goal_count} ADET SMART hedef içeren v1 BASELINE hedef seti üret.
 
         GİRDİLER:
         - Çalışan: {employee_name}
@@ -655,7 +655,7 @@ class Analyzer:
         {evidence_text}
 
         KESİN KURALLAR — HEPSİNE UYULACAK:
-        1. Hedef sayısı KESİNLİKLE 3 olmalı. Ne 2 ne 4 — tam olarak 3.
+        1. Hedef sayısı KESİNLİKLE {goal_count} olmalı. Ne daha az ne daha çok — tam olarak {goal_count}.
         2. Her hedef SADECE '{target_type}' kategorisiyle ilgili olmalı. Başka kategori yasak.
         3. 'smart_goal' cümlesi içinde hedef rakamı (target_value) ve zaman çerçevesi ({get_target_year()} sonu gibi) MUTLAKA geçmeli. Ondalık sayı kullanma, doğrudan tam sayılarla net hedef belirt.
         4. HEDEF YÖNÜ KURALI (ÇOK KRİTİK): Geçmiş verideki "Hedef Yönü" veya bağlama göre:
@@ -740,6 +740,40 @@ class Analyzer:
                 return data
             logger.warning(f"Revise JSON attempt {attempt+1} failed or missing keys.")
         return data
+
+    def validate_manual_revision(self, old_value, new_value, target_direction):
+        """
+        Manuel revizyonlarda EU AI Act uyumu ve %30 kısıt limitini kontrol eder.
+        Döndürür: { "valid": bool, "error": str, "clamped_value": float }
+        """
+        try:
+            old_val = float(old_value)
+            new_val = float(new_value)
+        except ValueError:
+            return {"valid": False, "error": "Geçersiz sayısal değer formatı.", "clamped_value": old_value}
+
+        if old_val == 0:
+            return {"valid": True, "error": "", "clamped_value": new_val}
+
+        change_ratio = abs(new_val - old_val) / abs(old_val)
+        
+        # 1. Yön Kontrolü
+        if target_direction.strip().lower() == "azalan":
+            if new_val > old_val:
+                return {"valid": False, "error": "Hata: 'Azalan' yönlü bir hedef artırılamaz.", "clamped_value": old_val}
+            # %30 Limit
+            if change_ratio > 0.30:
+                limit_val = old_val * 0.70
+                return {"valid": False, "error": f"Hata: Değişim %30'u aşamaz. Azami inilebilecek değer: {limit_val:.1f}", "clamped_value": limit_val}
+        else: # Artan
+            if new_val < old_val:
+                return {"valid": False, "error": "Hata: 'Artan' yönlü bir hedef azaltılamaz.", "clamped_value": old_val}
+            # %30 Limit
+            if change_ratio > 0.30:
+                limit_val = old_val * 1.30
+                return {"valid": False, "error": f"Hata: Değişim %30'u aşamaz. Azami çıkılabilecek değer: {limit_val:.1f}", "clamped_value": limit_val}
+
+        return {"valid": True, "error": "", "clamped_value": new_val}
 
     def analyze_performance(self, employee_name, target_type, history_text):
         """Seçilen hedef türü için çalışanın Güçlü ve Zayıf yönlerini analiz eder."""
