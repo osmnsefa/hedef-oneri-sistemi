@@ -86,6 +86,7 @@ GOAL_SET_SCHEMA = """
       "context": "string (GEÇMİŞ VERİYE VE GÖREV TANIMI'NA DAYALI gerekçe: bu hedef neden seçildi, geçmişte ne oldu, şimdi ne hedefleniyor)",
       "evidence_justification": "string (Bu hedefin mantıksal dayanağı: 1. Geçmiş performans, 2. Görev tanımı, 3. Geri bildirim dayanaklarını içeren kanıt paragrafı)",
       "vision_alignment_note": "string (Bu hedef vizyonun hangi temasını karşılıyor? MAKSIMUM 15 KELIME. Örn: 'Operasyonel mükemmellik temasını; kalite odağıyla destekliyor.')",
+      "vision_influence_explanation": "string (Bu hedefin yönetici vizyonundan nasıl etkilendiği, vizyon ile hedef arasındaki ilişki ve yapay zekanın bu kararı verirken vizyondan nasıl etkilendiğinin detaylı açıklaması)",
       "metrics": {
         "previous_value": 0,
         "target_value": 0,
@@ -101,6 +102,7 @@ GOAL_SET_SCHEMA = """
       "context": "string (geçmiş + görev tanımı gerekçesi)",
       "evidence_justification": "string (Bu hedefin mantıksal dayanağı)",
       "vision_alignment_note": "string (MAKSIMUM 15 KELIME — bu hedef vizyonun hangi temasını karşılıyor)",
+      "vision_influence_explanation": "string (Bu hedefin yönetici vizyonundan nasıl etkilendiği, vizyon ile hedef arasındaki ilişki ve yapay zekanın bu kararı verirken vizyondan nasıl etkilendiğinin detaylı açıklaması)",
       "metrics": {
         "previous_value": 0,
         "target_value": 0,
@@ -116,6 +118,7 @@ GOAL_SET_SCHEMA = """
       "context": "string (geçmiş + görev tanımı gerekçesi)",
       "evidence_justification": "string (Bu hedefin mantıksal dayanağı)",
       "vision_alignment_note": "string (MAKSIMUM 15 KELIME — bu hedef vizyonun hangi temasını karşılıyor)",
+      "vision_influence_explanation": "string (Bu hedefin yönetici vizyonundan nasıl etkilendiği, vizyon ile hedef arasındaki ilişki ve yapay zekanın bu kararı verirken vizyondan nasıl etkilendiğinin detaylı açıklaması)",
       "metrics": {
         "previous_value": 0,
         "target_value": 0,
@@ -669,6 +672,7 @@ class Analyzer:
         7. %30 HARD LIMIT (ÇOK KRİTİK): 'target_value' değeri, 'previous_value' değerinden oransal olarak en fazla %30 değişebilir.
         8. KALİTATİF BAĞLAM: Önerilerini oluştururken görev tanımı ve geri bildirimleri dikkate al.
         9. 'vision_alignment_note' alanı: Her hedef için MUTLAKA doldur. MAKSİMUM 15 KELİME. Örn: 'Büyüme temasını; pazar payı odaklı hedefle karşılıyor.'
+        10. 'vision_influence_explanation' alanı: Her hedef için yönetici vizyonunun bu hedefe nasıl etki ettiğini, aralarındaki ilişkiyi ve yapay zeka olarak senin bu kararı verirken yöneticinin vizyonundan nasıl etkilendiğini anlatan açıklayıcı bir metin.
         
         Format: {GOAL_SET_SCHEMA}
         Lütfen geçerli bir JSON döndür. goal_set_id'yi '{goal_set_uuid}' olarak ata.

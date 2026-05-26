@@ -1,4 +1,5 @@
 import streamlit as st
+import textwrap
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -81,8 +82,6 @@ def create_new_user(session, sicil_no, isim, role, manager_sicil=None):
     return True, "Kullanıcı başarıyla oluşturuldu."
 
 def render_login_screen():
-    st.markdown("<h2 style='text-align: center; color: #4CAF50;'>Stratejik PMS'e Hoş Geldiniz</h2>", unsafe_allow_html=True)
-    
     if st.session_state.get('pending_password_change'):
         sicil = st.session_state['pending_password_change']
         st.markdown("<p style='text-align: center; color:red;'>Güvenliğiniz için lütfen yeni bir şifre belirleyin.</p>", unsafe_allow_html=True)
@@ -108,51 +107,65 @@ def render_login_screen():
                     st.rerun()
         return False
 
-    st.markdown("<p style='text-align: center;'>Devam etmek için Sicil numaranız ve Şifreniz ile giriş yapın.</p>", unsafe_allow_html=True)
+    # Centered Layout
+    _, col2, _ = st.columns([1, 1.5, 1], gap="large")
     
-    with st.form("login_form"):
-        username = st.text_input("Sicil No", placeholder="Örn: 99120")
-        password = st.text_input("Şifre", type="password", placeholder="Şifrenizi girin")
-        submitted = st.form_submit_button("Giriş Yap")
+    with col2:
+        st.markdown("""
+        <div class="saas-card" style="text-align: center; padding: 2.5rem; margin-top: 4rem;">
+            <h1 style="color:#1e293b; font-size:2rem; font-weight:800; margin-bottom:0.5rem; font-family:'Inter', sans-serif;">
+                🎯 Stratejik PMS
+            </h1>
+            <p style="color:#64748b; font-size:1rem; margin-bottom: 2rem; font-family:'Inter', sans-serif;">
+                Yapay Zeka Destekli Yeni Nesil Performans Yönetim Sistemi
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
         
-        if submitted:
-            if not username or not password:
-                st.error("Lütfen sicil numaranızı ve şifrenizi giriniz.")
-                return False
-                
-            session = get_db_session()
-            user = session.query(User).filter(User.sicil_no == username.strip()).first()
+        with st.form("login_form"):
+            username = st.text_input("Sicil No", placeholder="Örn: 99120")
+            password = st.text_input("Şifre", type="password", placeholder="Şifrenizi girin")
+            submitted = st.form_submit_button("Giriş Yap")
             
-            if user and check_password_hash(user.password_hash, password):
-                if hasattr(user, 'is_active') and getattr(user, 'is_active', True) is False:
-                    st.error("Hesabınız pasif duruma getirilmiştir. Lütfen yönetici ile iletişime geçin.")
-                    session.close()
+            if submitted:
+                if not username or not password:
+                    st.error("Lütfen sicil numaranızı ve sifrenizi giriniz.")
                     return False
                     
-                user.last_login = datetime.now()
-                session.commit()
-
-                if getattr(user, 'force_password_change', False):
-                    st.session_state['pending_password_change'] = user.sicil_no
-                    st.warning("Güvenliğiniz için şifrenizi yenilemeniz gerekmektedir.")
+                session = get_db_session()
+                user = session.query(User).filter(User.sicil_no == username.strip()).first()
+                
+                if user and check_password_hash(user.password_hash, password):
+                    if hasattr(user, 'is_active') and getattr(user, 'is_active', True) is False:
+                        st.error("Hesabınız pasif duruma getirilmistir. Lütfen yönetici ile iletisime geçin.")
+                        session.close()
+                        return False
+                        
+                    user.last_login = datetime.now()
+                    session.commit()
+    
+                    if getattr(user, 'force_password_change', False):
+                        st.session_state['pending_password_change'] = user.sicil_no
+                        st.warning("Güvenliğiniz için sifrenizi yenilemeniz gerekmektedir.")
+                        session.close()
+                        st.rerun()
+                        return False
+    
+                    st.success("Giriş Başarılı! Yönlendiriliyorsunuz...")
+                    
+                    # Yetki hesaplaması
+                    allowed_sicils = get_allowed_sicil_list(user.sicil_no, user.role)
+                    
+                    st.session_state['user_id'] = user.sicil_no
+                    st.session_state['username'] = user.sicil_no
+                    st.session_state['role'] = user.role
+                    st.session_state['allowed_employees'] = allowed_sicils
+                    
                     session.close()
                     st.rerun()
-                    return False
-
-                st.success("Giriş Başarılı! Hoş Geldiniz, yetkileriniz ayarlanıyor...")
-                
-                # Yetki hesaplaması
-                allowed_sicils = get_allowed_sicil_list(user.sicil_no, user.role)
-                
-                st.session_state['user_id'] = user.sicil_no
-                st.session_state['username'] = user.sicil_no
-                st.session_state['role'] = user.role
-                st.session_state['allowed_employees'] = allowed_sicils
-                
-                session.close()
-                st.rerun()
-            else:
-                session.close()
-                st.error("Hatalı Sicil No veya Şifre.")
-                
+                else:
+                    session.close()
+                    st.error("Hatalı Sicil No veya Şifre.")
+                    
     return 'user_id' in st.session_state

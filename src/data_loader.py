@@ -212,3 +212,92 @@ class DataLoader:
             return []
         finally:
             session.close()
+
+    def get_team_performance_summary(self, allowed_sicils):
+        """Yöneticinin ekibindeki çalışanların geçmiş performans skorlarını/risk durumlarını döner."""
+        if not allowed_sicils:
+            return pd.DataFrame()
+            
+        session = get_db_session()
+        try:
+            from src.models import PerformanceHistory, Employee
+            emps = session.query(Employee).filter(Employee.user_sicil.in_(allowed_sicils)).all()
+            
+            data = []
+            for emp in emps:
+                records = session.query(PerformanceHistory.sonuc).filter(PerformanceHistory.sicil_no == emp.user_sicil).all()
+                total = len(records)
+                beklenen = 0
+                ustunde = 0
+                altinda = 0
+                for r in records:
+                    s = str(r[0]).strip().lower() if r[0] else ''
+                    if s == 'beklenen': beklenen += 1
+                    elif s == 'beklenenin üstünde': ustunde += 1
+                    elif s == 'beklenenin altında': altinda += 1
+                
+                if total == 0:
+                    status = "Beklemede"
+                    score = 0.0
+                else:
+                    altinda_ratio = altinda / total
+                    if altinda_ratio >= 0.33: # %33 ve daha fazla "altında" ise riskli
+                        status = "Riskli"
+                    else:
+                        status = "İyi"
+                    score = ((beklenen * 75) + (ustunde * 100) + (altinda * 25)) / total
+                
+                data.append({
+                    "Sicil": emp.user_sicil,
+                    "İsim": f"{emp.first_name} {emp.last_name}",
+                    "Bölüm": emp.department,
+                    "Unvan": emp.title,
+                    "Performans Durumu": status,
+                    "Performans Skoru": round(score, 1),
+                    "Toplam Geçmiş Hedef": total
+                })
+            return pd.DataFrame(data)
+        except Exception as e:
+            logger.error(f"Ekip performans özeti çekerken hata: {e}")
+            return pd.DataFrame()
+        finally:
+            session.close()
+
+    def get_team_goal_assignment_stats(self, allowed_sicils):
+        """Ekipteki hangi çalışanlara hedef atanmış verilerini döner."""
+        if not allowed_sicils:
+            return pd.DataFrame()
+            
+        session = get_db_session()
+        try:
+            from src.models import AnnualGoals, Employee
+            emps = session.query(Employee).filter(Employee.user_sicil.in_(allowed_sicils)).all()
+            
+            data = []
+            for emp in emps:
+                # Kilitli aktif hedefler
+                locked_goals = session.query(AnnualGoals).filter(
+                    AnnualGoals.employee_sicil == emp.user_sicil,
+                    AnnualGoals.is_locked == True,
+                    AnnualGoals.approval_status != 'Passive'
+                ).count()
+                
+                # Taslak hedefler
+                draft_goals = session.query(AnnualGoals).filter(
+                    AnnualGoals.employee_sicil == emp.user_sicil,
+                    AnnualGoals.is_locked == False,
+                    AnnualGoals.admin_approval_status != 'Reddedildi',
+                    AnnualGoals.approval_status != 'Passive'
+                ).count()
+                
+                data.append({
+                    "Sicil": emp.user_sicil,
+                    "Atanan Hedef Sayısı": locked_goals,
+                    "Taslak Hedef Sayısı": draft_goals
+                })
+            return pd.DataFrame(data)
+        except Exception as e:
+            logger.error(f"Ekip hedef atama istatistikleri çekerken hata: {e}")
+            return pd.DataFrame()
+        finally:
+            session.close()

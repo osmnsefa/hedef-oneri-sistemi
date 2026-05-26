@@ -1,4 +1,5 @@
 import streamlit as st
+import textwrap
 import pandas as pd
 from src.config import Config
 from src.ui_components import load_custom_css, render_header, display_chat_message, render_dss_metrics, render_vision_card, render_devils_advocate_warning, render_vision_traceability
@@ -123,6 +124,17 @@ try:
                 _conn.commit()
                 logging.info("✅ Migration: Vizyon kolonları (vision_text, vision_ambition_level, vision_stretch_factor) annual_goals tablosuna eklendi.")
                 
+            _result_vision_exp = _conn.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'annual_goals' 
+                  AND column_name = 'vision_influence_explanation'
+            """))
+            if _result_vision_exp.fetchone() is None:
+                _conn.execute(text("ALTER TABLE annual_goals ADD COLUMN vision_influence_explanation TEXT"))
+                _conn.commit()
+                logging.info("✅ Migration: 'vision_influence_explanation' kolonu annual_goals tablosuna eklendi.")
+                
             _result_rev = _conn.execute(text("""
                 SELECT column_name 
                 FROM information_schema.columns 
@@ -226,7 +238,7 @@ with st.sidebar:
         """, unsafe_allow_html=True)
         
         st.markdown("---")
-        if st.button("🚪 Çıkış Yap", width='stretch', type="secondary"):
+        if st.button("🚪 Çıkış Yap", use_container_width=True):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
@@ -238,8 +250,15 @@ with st.sidebar:
         </div>
         """, unsafe_allow_html=True)
 
+        # Manager dashboard'dan seçim geldiyse active_employee'yi güncelle
+        if st.session_state.get('_mgr_selected_emp'):
+            st.session_state.active_employee = st.session_state.pop('_mgr_selected_emp')
+
         # Çalışan Seçimi
         if employees_list:
+            if current_role == 'Manager':
+                employees_list = ["(Tüm Ekip - Genel Bakış)"] + employees_list
+                
             emp_index = 0
             if st.session_state.get('active_employee') in employees_list:
                 emp_index = employees_list.index(st.session_state.get('active_employee'))
@@ -329,15 +348,14 @@ with st.sidebar:
 
         st.markdown("---")
 
-        col_s1, col_s2 = st.columns(2)
-        with col_s1:
-            if st.button("♻️ Oturumu Temizle"):
+        with st.expander("⚙️ Sistem Yönetimi", expanded=False):
+            if st.button("♻️ Oturumu Temizle", use_container_width=True):
                 for key in ["chat_history", "current_goal_set", "proposed_patch",
                             "eval_result", "perf_res", "last_analysis", "decoded_vision"]:
                     st.session_state[key] = None if key != "chat_history" else []
                 st.rerun()
-        with col_s2:
-            if st.button("🔄 Veri İndeksle"):
+                
+            if st.button("🔄 Veri İndeksle", use_container_width=True):
                 with st.spinner("İndeksleniyor..."):
                     try:
                         analyzer.vector_store.refresh_data()
@@ -349,23 +367,22 @@ with st.sidebar:
                     except Exception as e:
                         st.error(f"Hata: {e}")
 
-        st.markdown("---")
-        if st.button("🚪 Çıkış Yap", width='stretch', type="secondary"):
+            if st.button("🧹 Önbellek & Sistem Sıfırla", use_container_width=True):
+                st.cache_resource.clear()
+                st.cache_data.clear()
+                for key in ["chat_history", "current_goal_set", "proposed_patch",
+                            "eval_result", "perf_res", "last_analysis", "decoded_vision"]:
+                    st.session_state[key] = None if key != "chat_history" else []
+                st.success("Sistem sıfırlandı!")
+                st.rerun()
+
+        if st.button("🚪 Çıkış Yap", use_container_width=True):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
 
-        if st.button("🧹 Önbellek & Sistem Sıfırla", width='stretch'):
-            st.cache_resource.clear()
-            st.cache_data.clear()
-            for key in ["chat_history", "current_goal_set", "proposed_patch",
-                        "eval_result", "perf_res", "last_analysis", "decoded_vision"]:
-                st.session_state[key] = None if key != "chat_history" else []
-            st.success("Sistem sıfırlandı!")
-            st.rerun()
-
         st.markdown(f"""
-        <p style='text-align:center; color:rgba(255,255,255,0.3); font-size:0.72rem; margin-top:1rem;'>
+        <p style='text-align:center; color:#64748b; font-size:0.72rem; margin-top:1rem;'>
             Engine v{getattr(analyzer, 'version', '—')}
         </p>
         """, unsafe_allow_html=True)
@@ -387,6 +404,12 @@ current_role = st.session_state.get('role', '')
 # ---- ADMIN: Sadece Admin Dashboard ----
 if current_role == 'Admin' and not st.session_state.get('force_chat_view', False):
     render_admin_dashboard()
+    st.stop()
+
+# ---- MANAGER: Ekip Genel Bakış ----
+if current_role == 'Manager' and employee_name == "(Tüm Ekip - Genel Bakış)":
+    from src.manager_dashboard import render_manager_dashboard
+    render_manager_dashboard()
     st.stop()
 
 # ---- DİĞER ROLLER: Normal Çalışan/Yönetici Arayüzü ----
@@ -443,21 +466,22 @@ tab1, tab2, tab3, tab4 = st.tabs(["💬 Asistan", "📌 Hedef Süreci", "🔍 Pe
 
 # ====================== TAB 1: CHAT ASISTAN ======================
 with tab1:
-    st.markdown(f"""
+    st.markdown(textwrap.dedent(f"""\
     <div style="
-        background: linear-gradient(135deg, #f0f9ff, #e0f2fe);
-        border: 1px solid #bae6fd;
-        border-radius: 12px;
-        padding: 0.9rem 1.2rem;
+        background-color: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-left: 4px solid #3b82f6;
+        border-radius: 6px;
+        padding: 0.85rem 1.1rem;
         margin-bottom: 1rem;
     ">
-        <p style="margin:0; font-size:1rem; color:#0369a1; font-weight:600;">
+        <p style="margin:0; font-size:0.9rem; color:#475569; font-weight:500;">
             🔒 <b>Kısıtlı Oturum:</b> Bu asistan yalnızca
             <b>{employee_name}</b> çalışanına ait <b>{target_type}</b>
             verilerine erişebilir. Diğer çalışan ve kategoriler hakkında bilgi paylaşmaz.
         </p>
     </div>
-    """, unsafe_allow_html=True)
+    """), unsafe_allow_html=True)
 
     # Geçmiş mesajları göster (silinmez, kalıcı)
     chat_placeholder = st.container()
@@ -544,6 +568,7 @@ with tab2:
                         "direction": dg.hedef_yonu
                     },
                     "evidence_justification": dg.evidence_justification,
+                    "vision_influence_explanation": dg.vision_influence_explanation,
                     "is_locked": False
                 })
             st.session_state.current_goal_set = {"version": _draft_goals[0].version_no, "goals": goals_list}
@@ -598,6 +623,7 @@ with tab2:
                                 birim=_rg_db.birim,
                                 evidence_justification=_rg_db.evidence_justification,
                                 hedef_yonu=_rg_db.hedef_yonu,
+                                vision_influence_explanation=_rg_db.vision_influence_explanation,
                                 is_locked=True,
                                 approval_status='Locked',
                                 admin_approval_status='Onay Bekliyor',
@@ -656,6 +682,7 @@ with tab2:
                                 birim=_rg_db.birim,
                                 evidence_justification=_rg_db.evidence_justification,
                                 hedef_yonu=_rg_db.hedef_yonu,
+                                vision_influence_explanation=_rg_db.vision_influence_explanation,
                                 is_locked=True,
                                 approval_status='Locked',
                                 admin_approval_status='Onay Bekliyor',
@@ -729,6 +756,7 @@ with tab2:
                             birim=g.get('metrics', {}).get('unit', ''),
                             evidence_justification=g.get('evidence_justification', 'Gerekçe Yok'),
                             hedef_yonu=g.get('metrics', {}).get('direction', 'Artan'),
+                            vision_influence_explanation=g.get('vision_influence_explanation', ''),
                             is_locked=False,
                             approval_status='Draft',
                             admin_approval_status='Taslak',
@@ -825,6 +853,8 @@ with tab2:
                         direction = g.get('metrics', {}).get('direction', 'Artan')
                         st.markdown(f"**Değer:** {val} {unit} (Yön: {direction})")
                         st.markdown(f"**Gerekçe:** {g.get('evidence_justification', '')}")
+                        if g.get('vision_influence_explanation'):
+                            st.markdown(f"**Yönetici Vizyonu Etkisi:** {g.get('vision_influence_explanation')}")
                         
                         st.markdown("---")
                         tab_manual, tab_ai = st.tabs(["🛠️ Manuel Revizyon", "🤖 AI Danışman"])
@@ -1014,6 +1044,7 @@ with tab2:
                                         birim=g.get('metrics', {}).get('unit', ''),
                                         evidence_justification=g.get('evidence_justification', 'Gerekçe Yok'),
                                         hedef_yonu=direction,
+                                        vision_influence_explanation=g.get('vision_influence_explanation', ''),
                                         is_locked=True,
                                         approval_status='Locked',
                                         admin_approval_status='Onay Bekliyor',
@@ -1154,9 +1185,14 @@ with tab4:
                 AnnualGoals.is_locked == True,
                 AnnualGoals.approval_status != 'Passive'
             ).order_by(AnnualGoals.yil.desc(), AnnualGoals.hedef_turu).all()
+            
+            _all_rejected = _asess.query(AnnualGoals).filter(
+                AnnualGoals.employee_sicil == emp_sicil_for_lock,
+                AnnualGoals.admin_approval_status == 'Reddedildi'
+            ).order_by(AnnualGoals.yil.desc(), AnnualGoals.hedef_turu).all()
 
-            if not _all_locked:
-                st.info("Bu çalışana ait kesinleştirilmiş hedef bulunmamaktadır. Hedef Süreci sekmesinden yeni hedef oluşturup onaylayabilirsiniz.")
+            if not _all_locked and not _all_rejected:
+                st.info("Bu çalışana ait kesinleştirilmiş veya reddedilmiş hedef bulunmamaktadır. Hedef Süreci sekmesinden yeni hedef oluşturup onaylayabilirsiniz.")
             else:
                 def has_chat_history(g):
                     logs = getattr(g, 'denetim_loglari', [])
@@ -1169,6 +1205,7 @@ with tab4:
                 _onaylananlar = [g for g in _all_locked if g.admin_approval_status == 'Onaylandı']
                 _onay_bekleyenler = [g for g in _all_locked if g.admin_approval_status != 'Onaylandı' and not has_chat_history(g)]
                 _sohbet_edilenler = [g for g in _all_locked if g.admin_approval_status != 'Onaylandı' and has_chat_history(g)]
+                _reddedilenler = _all_rejected
                 
                 # ── Özet metrik kartları ──────────────────────────────────────
                 _total = len(_all_locked)
@@ -1180,10 +1217,11 @@ with tab4:
                 _mc3.metric("⬇️ Azalan Hedefler", _azalan)
                 st.markdown("---")
 
-                tab_onay_bekleyen, tab_sohbet, tab_onay = st.tabs([
+                tab_onay_bekleyen, tab_sohbet, tab_onay, tab_reddedilen = st.tabs([
                     f"Onay Bekleyenler ({len(_onay_bekleyenler)})", 
                     f"Revizyon Bekleyenler ({len(_sohbet_edilenler)})", 
-                    f"Onaylanan Hedefler ({len(_onaylananlar)})"
+                    f"Onaylanan Hedefler ({len(_onaylananlar)})",
+                    f"Reddedilen Hedefler ({len(_reddedilenler)})"
                 ])
                 
                 _export_rows = []
@@ -1239,7 +1277,10 @@ with tab4:
                         _smart_html = str(_smart)
                         if getattr(_goal, 'is_revised', False):
                             _rev_date = _goal.revised_at.strftime('%d.%m.%Y') if _goal.revised_at else ""
-                            _smart_html += f'<br/><span style="background-color: #fef08a; color: #854d0e; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; margin-top: 4px; display: inline-block;">Revize Edildi - {_rev_date}</span>'
+                            _smart_html += f'<div style="text-align: right; width: 100%;"><span style="color: #3b82f6; font-size: 0.8rem; font-weight: 500;">Revize Edildi - {_rev_date}</span></div>'
+                            
+                        if getattr(_goal, 'vision_influence_explanation', None):
+                            _smart_html += f'<br/><div style="margin-top:8px; padding:6px; background-color:#f8fafc; border-left:3px solid #3b82f6; font-size:0.75rem; color:#475569;"><b>Vizyon Etkisi:</b> {_goal.vision_influence_explanation}</div>'
                             
                         _rc[3].markdown(f'<div class="excel-table-row">{_smart_html}</div>', unsafe_allow_html=True)
                         _rc[4].markdown(f'<div class="excel-table-row">{_prev_val}</div>', unsafe_allow_html=True)
@@ -1296,7 +1337,7 @@ with tab4:
                                     else:
                                         st.caption("Henüz bir iletişim kaydı yok.")
                                         
-                                    if current_role == 'Manager' and not is_approved_tab:
+                                    if current_role == 'Manager' and not is_approved_tab and admin_status != 'Reddedildi':
                                         st.markdown("#### 🛠️ Hedef Revizyonu (Editör Modu)")
                                         with st.form(f"manager_audit_form_{_goal.id}"):
                                             new_smart = st.text_area("Yeni SMART Hedef Cümlesi", value=_goal.smart_hedef)
@@ -1332,6 +1373,7 @@ with tab4:
                                                         birim=_goal.birim,
                                                         evidence_justification=_goal.evidence_justification,
                                                         hedef_yonu=_goal.hedef_yonu,
+                                                        vision_influence_explanation=_goal.vision_influence_explanation,
                                                         is_locked=True,
                                                         approval_status='Locked',
                                                         admin_approval_status='Onay Bekliyor',
@@ -1464,12 +1506,12 @@ with tab4:
 
                 with tab_onay_bekleyen:
                     render_goals_table(_onay_bekleyenler, is_approved_tab=False)
-                    
                 with tab_sohbet:
                     render_goals_table(_sohbet_edilenler, is_approved_tab=False)
-                    
                 with tab_onay:
                     render_goals_table(_onaylananlar, is_approved_tab=True)
+                with tab_reddedilen:
+                    render_goals_table(_reddedilenler, is_approved_tab=False)
 
                 st.markdown("<br>", unsafe_allow_html=True)
 

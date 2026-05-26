@@ -11,6 +11,15 @@ def load_custom_css():
             background-color: #f0f4f9;
         }
         
+        .saas-card {
+            background-color: white;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 2.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            margin-bottom: 1.5rem;
+        }
+        
         /* ===== SIDEBAR — Koyu Lacivert (app.py'deki beyaz metinler için şart) ===== */
         section[data-testid="stSidebar"] {
             background: linear-gradient(180deg, #1e3a5f 0%, #162d4a 100%);
@@ -345,7 +354,12 @@ def render_locked_goals(employee_sicil):
             c1, c2, c3, c4, c5, c6 = st.columns([0.5, 1.5, 3, 1, 1, 0.5])
             with c1: st.markdown(f'<div class="excel-table-row">{goal.yil}</div>', unsafe_allow_html=True)
             with c2: st.markdown(f'<div class="excel-table-row">{goal.hedef_turu}</div>', unsafe_allow_html=True)
-            with c3: st.markdown(f'<div class="excel-table-row">{goal.smart_hedef}</div>', unsafe_allow_html=True)
+            with c3:
+                smart_val = goal.smart_hedef
+                if getattr(goal, 'is_revised', False):
+                    rev_date = goal.revised_at.strftime('%d.%m.%Y') if goal.revised_at else ""
+                    smart_val += f'<div style="text-align: right; width: 100%;"><span style="color: #2563eb; font-size: 0.8rem; font-weight: 500;">Revize Edildi - {rev_date}</span></div>'
+                st.markdown(f'<div class="excel-table-row">{smart_val}</div>', unsafe_allow_html=True)
             with c4: st.markdown(f'<div class="excel-table-row">{goal.hedef_degeri}</div>', unsafe_allow_html=True)
             with c5: st.markdown(f'<div class="excel-table-row">{getattr(goal, "hedef_yonu", "Artan")}</div>', unsafe_allow_html=True)
             with c6:

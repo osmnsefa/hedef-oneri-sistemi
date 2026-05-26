@@ -90,6 +90,7 @@ class AnnualGoals(Base):
     vision_text = Column(Text, nullable=True)                  # Ham vizyon metni
     vision_ambition_level = Column(String, nullable=True)      # Zayıf | Dengeli | Agresif
     vision_stretch_factor = Column(Float, nullable=True)       # 0.0 – 1.0
+    vision_influence_explanation = Column(Text, nullable=True) # AI tarafından üretilen vizyon etki açıklaması
 
     # Revizyon ve İzlenebilirlik (Traceability)
     is_revised = Column(Boolean, default=False)
