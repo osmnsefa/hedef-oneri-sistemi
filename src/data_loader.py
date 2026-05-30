@@ -4,7 +4,7 @@ import uuid
 from sqlalchemy.orm import Session
 import streamlit as st
 from src.auth import get_db_session
-from src.models import Employee, PerformanceHistory, ChatHistory, ChatSession
+from src.models import Employee, PerformanceHistory, ChatHistory, ChatSession, JobDescriptions
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,85 @@ class DataLoader:
         except Exception as e:
             logger.error(f"Metadata çekerken hata: {e}")
             return {}
+        finally:
+            session.close()
+
+    def get_exact_job_description(self, employee_title):
+        """Çalışanın unvanına göre görev tanımını doğrudan SQL veritabanından çeker. Bulamazsa boş döner."""
+        if not employee_title:
+            return ""
+            
+        session = get_db_session()
+        try:
+            # Önce tam eşleşme ara
+            jd = session.query(JobDescriptions).filter(JobDescriptions.position_name == employee_title).first()
+            
+            # Tam eşleşme yoksa, içerisinde kelime geçen ilk kaydı bul
+            if not jd:
+                jd = session.query(JobDescriptions).filter(JobDescriptions.position_name.ilike(f"%{employee_title}%")).first()
+                
+            # Genellenebilir Esnek Arama: İlk ve Son kelimeyi içerenleri bul (Örn: "Montaj Hattı Teknisyen" -> "Montaj" ve "Teknisyen")
+            if not jd:
+                words = employee_title.split()
+                if len(words) >= 2:
+                    ilk_kelime = words[0]
+                    son_kelime = words[-1]
+                    jd = session.query(JobDescriptions).filter(
+                        JobDescriptions.position_name.ilike(f"%{ilk_kelime}%"),
+                        JobDescriptions.position_name.ilike(f"%{son_kelime}%")
+                    ).first()
+                
+            if jd:
+                parts = []
+                if jd.responsibilities: parts.append(f"Ana Sorumluluklar:\n{jd.responsibilities}")
+                if jd.technical_requirements: parts.append(f"Teknik Gereksinimler:\n{jd.technical_requirements}")
+                if jd.competencies: parts.append(f"Yetkinlikler:\n{jd.competencies}")
+                return "\n\n".join(parts)
+            return ""
+        except Exception as e:
+            logger.error(f"SQL Görev Tanımı çekerken hata: {e}")
+            return ""
+        finally:
+            session.close()
+
+    def get_logged_in_user_info(self, user_sicil):
+        """Giriş yapan kullanıcının kimlik bilgilerini (İsim, Unvan, Bölüm, Sicil) döner."""
+        session = get_db_session()
+        try:
+            # Önce Employee tablosunda ara
+            emp = session.query(Employee).filter(Employee.user_sicil == user_sicil).first()
+            if emp:
+                return {
+                    "Name": f"{emp.first_name} {emp.last_name}",
+                    "Sicil": emp.user_sicil,
+                    "Unvan": emp.title if emp.title else "Yönetici",
+                    "Bölüm Ana Sorumluluk Alanı": emp.department if emp.department else "Yönetim"
+                }
+            
+            # Yoksa PerformanceHistory tablosunda ara
+            ph = session.query(PerformanceHistory).filter(PerformanceHistory.sicil_no == user_sicil).first()
+            if ph:
+                return {
+                    "Name": ph.isim,
+                    "Sicil": ph.sicil_no,
+                    "Unvan": ph.unvan if ph.unvan else "Yönetici",
+                    "Bölüm Ana Sorumluluk Alanı": ph.bolum if ph.bolum else "Yönetim"
+                }
+                
+            return {
+                "Name": "Yönetici",
+                "Sicil": user_sicil,
+                "Unvan": "Yönetici",
+                "Bölüm Ana Sorumluluk Alanı": "Yönetim"
+            }
+        except Exception as e:
+            logger.error(f"Giriş yapan kullanıcı bilgileri çekerken hata: {e}")
+            return {
+                "Name": "Yönetici",
+                "Sicil": user_sicil,
+                "Unvan": "Yönetici",
+                "Bölüm Ana Sorumluluk Alanı": "Yönetim"
+            }
         finally:
             session.close()
 
@@ -213,6 +292,46 @@ class DataLoader:
         finally:
             session.close()
 
+    def rename_chat_session(self, session_id, new_title):
+        """Mevcut bir sohbet oturumunun başlığını (ismini) günceller."""
+        if not session_id or not new_title:
+            return False
+            
+        session = get_db_session()
+        try:
+            chat_session = session.query(ChatSession).filter_by(id=session_id).first()
+            if chat_session:
+                chat_session.title = new_title
+                import datetime
+                chat_session.updated_at = datetime.datetime.now()
+                session.commit()
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Sohbet oturumu adlandırılırken hata: {e}")
+            session.rollback()
+            return False
+        finally:
+            session.close()
+
+    def delete_chat_session(self, session_id):
+        """Bir sohbet oturumunu ve o oturuma ait tüm mesajları kalıcı olarak siler."""
+        if not session_id:
+            return False
+            
+        session = get_db_session()
+        try:
+            session.query(ChatHistory).filter(ChatHistory.session_id == session_id).delete(synchronize_session=False)
+            session.query(ChatSession).filter(ChatSession.id == session_id).delete(synchronize_session=False)
+            session.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Sohbet oturumu silinirken hata: {e}")
+            session.rollback()
+            return False
+        finally:
+            session.close()
+
     def get_team_performance_summary(self, allowed_sicils):
         """Yöneticinin ekibindeki çalışanların geçmiş performans skorlarını/risk durumlarını döner."""
         if not allowed_sicils:
@@ -299,5 +418,39 @@ class DataLoader:
         except Exception as e:
             logger.error(f"Ekip hedef atama istatistikleri çekerken hata: {e}")
             return pd.DataFrame()
+        finally:
+            session.close()
+
+    def get_approved_annual_goals(self, employee_sicil, target_type):
+        """Çalışanın onaylanmış ve kilitli yeni yıl hedeflerini metin olarak döner."""
+        if not employee_sicil:
+            return "Çalışan kimliği bulunamadı."
+            
+        session = get_db_session()
+        try:
+            from src.models import AnnualGoals
+            
+            goals = session.query(AnnualGoals).filter(
+                AnnualGoals.employee_sicil == employee_sicil,
+                AnnualGoals.hedef_turu == target_type,
+                AnnualGoals.approval_status != 'Passive',
+                AnnualGoals.admin_approval_status.in_(['Onaylandı', 'Onay Bekliyor'])
+            ).all()
+            
+            if not goals:
+                return "Henüz onaylanmış veya kilitlenmiş bir yeni yıl hedefi bulunmuyor."
+                
+            result_text = "### ONAYLANAN YENİ YIL HEDEFLERİ:\n"
+            for i, g in enumerate(goals, 1):
+                status_str = "🔒 Kilitli" if g.is_locked else "⏳ Taslak"
+                result_text += f"\nHedef {i} ({status_str}):\n"
+                result_text += f"- SMART Hedef: {g.smart_hedef}\n"
+                result_text += f"- Değer: {g.hedef_degeri} {g.birim} (Yön: {g.hedef_yonu})\n"
+                result_text += f"- Gerekçe: {g.evidence_justification}\n"
+            
+            return result_text
+        except Exception as e:
+            logger.error(f"Onaylı hedefleri çekerken hata: {e}")
+            return "Hedefler çekilirken bir veritabanı hatası oluştu."
         finally:
             session.close()

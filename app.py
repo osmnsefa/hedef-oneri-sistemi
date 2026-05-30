@@ -229,25 +229,60 @@ if 'allowed_employees' in st.session_state:
 with st.sidebar:
     current_role = st.session_state.get('role', '')
     
-    if current_role == 'Admin':
-        st.markdown("""
-        <div style="padding: 0.5rem 0 1rem 0;">
-            <h2 style="font-size:1.3rem; font-weight:800; margin:0; color:white;">🛡️ Admin Paneli</h2>
-            <p style="font-size:0.78rem; color:rgba(255,255,255,0.5); margin:0.2rem 0 0 0;">Sistem yönetimi</p>
+    # --- Profil Kartı Render Etme ---
+    user_id = st.session_state.get('user_id')
+    user_fullname = ""
+    user_title = ""
+    if user_id:
+        try:
+            from src.auth import get_db_session
+            from src.models import Employee
+            _profile_sess = get_db_session()
+            logged_in_emp = _profile_sess.query(Employee).filter(Employee.user_sicil == user_id).first()
+            if logged_in_emp:
+                user_fullname = f"{logged_in_emp.first_name} {logged_in_emp.last_name}"
+                user_title = logged_in_emp.title or logged_in_emp.department or current_role
+            else:
+                user_fullname = st.session_state.get('username', 'Kullanıcı')
+                user_title = current_role
+            _profile_sess.close()
+        except Exception:
+            user_fullname = st.session_state.get('username', 'Kullanıcı')
+            user_title = current_role
+
+    if user_fullname:
+        st.markdown(f"""
+        <div class="sidebar-profile-card">
+            <div class="profile-avatar">👤</div>
+            <div class="profile-info">
+                <div class="profile-name">{user_fullname}</div>
+                <div class="profile-title">{user_title}</div>
+            </div>
         </div>
         """, unsafe_allow_html=True)
+    # -------------------------------
+    
+    if current_role == 'Admin':
+        st.markdown("""
+        <div class="sidebar-menu-header">
+            <span class="menu-icon">🛡️</span>
+            <span class="menu-title">Admin Paneli</span>
+        </div>
+        <div class="sidebar-menu-subtitle">Sistem yönetimi</div>
+        """, unsafe_allow_html=True)
         
-        st.markdown("---")
+        st.markdown('<div class="menu-divider"></div>', unsafe_allow_html=True)
         if st.button("🚪 Çıkış Yap", use_container_width=True):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
     else:
         st.markdown("""
-        <div style="padding: 0.5rem 0 1rem 0;">
-            <h2 style="font-size:1.3rem; font-weight:800; margin:0; color:white;">🎛️ Kontrol Paneli</h2>
-            <p style="font-size:0.78rem; color:rgba(255,255,255,0.5); margin:0.2rem 0 0 0;">Parametreleri seçin</p>
+        <div class="sidebar-menu-header">
+            <span class="menu-icon">☰</span>
+            <span class="menu-title">Kontrol Paneli</span>
         </div>
+        <div class="sidebar-menu-subtitle">Parametreleri seçin</div>
         """, unsafe_allow_html=True)
 
         # Manager dashboard'dan seçim geldiyse active_employee'yi güncelle
@@ -306,7 +341,7 @@ with st.sidebar:
             st.session_state.original_goal_set = None
             st.session_state.decoded_vision = None
 
-        st.markdown("---")
+        st.markdown('<div class="menu-divider"></div>', unsafe_allow_html=True)
         st.markdown("### 💬 Sohbet Oturumları")
         
         u_sicil = st.session_state.get('user_id')
@@ -332,11 +367,27 @@ with st.sidebar:
                 if st.session_state.get('active_session_id') == s['id']:
                     btn_label = f"🟢 {s['title']}"
                     
-                if st.button(btn_label, key=f"sess_{s['id']}", use_container_width=True):
-                    st.session_state.active_session_id = s['id']
-                    st.session_state.chat_history = loader.get_chat_history(s['id'])
-                    st.session_state.current_goal_set = None
-                    st.rerun()
+                col_btn, col_opt = st.columns([0.85, 0.15])
+                with col_btn:
+                    if st.button(btn_label, key=f"sess_{s['id']}", use_container_width=True):
+                        st.session_state.active_session_id = s['id']
+                        st.session_state.chat_history = loader.get_chat_history(s['id'])
+                        st.session_state.current_goal_set = None
+                        st.session_state.scroll_to_bottom = True
+                        st.rerun()
+                with col_opt:
+                    with st.popover("⋮", use_container_width=True):
+                        new_title = st.text_input("Adlandır", value=s['title'], key=f"rn_{s['id']}")
+                        if st.button("💾 Kaydet", key=f"sv_{s['id']}", use_container_width=True):
+                            loader.rename_chat_session(s['id'], new_title)
+                            st.rerun()
+                        if st.button("🗑️ Sil", key=f"dl_{s['id']}", use_container_width=True):
+                            loader.delete_chat_session(s['id'])
+                            if st.session_state.get('active_session_id') == s['id']:
+                                st.session_state.active_session_id = None
+                                st.session_state.chat_history = []
+                                st.session_state.current_goal_set = None
+                            st.rerun()
         else:
             st.info("Henüz geçmiş sohbet yok.")
 
@@ -346,7 +397,7 @@ with st.sidebar:
             height=140
         )
 
-        st.markdown("---")
+        st.markdown('<div class="menu-divider"></div>', unsafe_allow_html=True)
 
         with st.expander("⚙️ Sistem Yönetimi", expanded=False):
             if st.button("♻️ Oturumu Temizle", use_container_width=True):
@@ -497,6 +548,11 @@ with tab1:
     if prompt := st.chat_input(f"{employee_name} hakkında soru sorun..."):
         # Kullanıcı mesajını hemen göster
         display_chat_message("user", prompt)
+        
+        e_sicil = employee_metadata.get('Sicil') if employee_metadata else None
+        e_unvan = employee_metadata.get('Unvan') if employee_metadata else ""
+        e_bolum = employee_metadata.get('Bölüm') if employee_metadata else ""
+        e_tam_unvan = f"{e_bolum} {e_unvan}".strip() if (e_bolum or e_unvan) else None
 
         with st.spinner("Yanıt üretiliyor..."):
             response = analyzer.chat_with_data(
@@ -505,7 +561,9 @@ with tab1:
                 employee_name=employee_name,
                 target_type=target_type,
                 metadata_context=metadata_context_str,
-                current_goal_set=st.session_state.current_goal_set
+                current_goal_set=st.session_state.current_goal_set,
+                sicil_no=e_sicil,
+                employee_title=e_tam_unvan
             )
             
             # Telemetry: Chat etkileşimi artır. (Sistem AI hakkında chat ederse)
@@ -538,12 +596,31 @@ with tab1:
             loader.save_chat_message(u_sicil, e_sicil, target_type, "user", prompt, session_id=sess_id)
             loader.save_chat_message(u_sicil, e_sicil, target_type, "bot", response, session_id=sess_id)
 
+        st.session_state.scroll_to_bottom = True
         st.rerun()
 
     if st.session_state.chat_history:
         if st.button("🗑️ Sohbeti Temizle", use_container_width=False):
             st.session_state.chat_history = []
             st.rerun()
+
+    # Eğer yeni bir sohbete tıklandıysa veya mesaj gönderildiyse aşağı kaydır
+    if st.session_state.get("scroll_to_bottom"):
+        import streamlit.components.v1 as components
+        components.html(
+            """
+            <script>
+                const doc = window.parent.document;
+                const main = doc.querySelector('.main') || doc.querySelector('section[data-testid="stMain"]');
+                if (main) {
+                    main.scrollTo({top: main.scrollHeight, behavior: 'smooth'});
+                }
+            </script>
+            """,
+            height=0,
+            width=0
+        )
+        st.session_state.scroll_to_bottom = False
 
 # ====================== TAB 2: HEDEF SÜRECİ ======================
 with tab2:

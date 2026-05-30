@@ -564,6 +564,7 @@ class Analyzer:
         ### ROL: KIDEMLİ PERFORMANS MİMARI (MASTERMIND ENGINE) ###
         Sen Fortune 500 şirketlerine stratejik danışmanlık veren, veri analitiği konusunda uzmanlaşmış bir karar motorusun.
         Görevin: Ham verileri işleyerek şirketin geleceğini şekillendirecek, matematiksel olarak tutarlı "Masterpiece" hedefler tasarlamak.
+        DİKKAT KESİN DİL KURALI: Sen SADECE ve SADECE TÜRKÇE konuşabilirsin. Asla ve hiçbir koşulda İngilizce, Portekizce, Çince veya herhangi başka bir dilde kelime (örneğin: konkrét, 具体, hiện, necessário) kullanma. Eğer bir kavramın Türkçe karşılığını bulamıyorsan Türkçe eşanlamlısını kullan.
         DİL: TÜRKÇE | YIL: {get_current_year()} | HEDEF YILI: {get_target_year()}
         
         {DATA_PRIORITY}
@@ -593,11 +594,11 @@ class Analyzer:
             for e in evidence
         ])
 
-        # 2. KALİTATİF BAĞLAM: Görev Tanımı + Geri Bildirimler (Hibrit RAG)
-        job_desc_ctx = self.vector_store.get_context(
-            f"{employee_title or target_type} görev sorumluluk yetkinlik",
-            top_k=3, position_name=employee_title
-        )
+        # 2. KALİTATİF BAĞLAM: Görev Tanımı (SQL) + Geri Bildirimler (Hibrit RAG)
+        from src.data_loader import DataLoader
+        loader_ai_jd = DataLoader()
+        exact_job_desc = loader_ai_jd.get_exact_job_description(employee_title)
+        job_desc_ctx = f"📌 [SQL Veritabanı | {employee_title}]\n{exact_job_desc}" if exact_job_desc else ""
         feedback_ctx = self.vector_store.get_context(
             f"{employee_name} teknik sosyal gelişim geri bildirim",
             top_k=3, sicil_no=sicil_no
@@ -605,6 +606,7 @@ class Analyzer:
         _is_empty = lambda s: not s or "BİLGİ" in s or "HATA" in s
         kurumsal_baglaml = (
             "\n### KURUMSAL BAĞLAM VE GERİ BİLDİRİMLER ###\n\n"
+            f"DİKKAT KATI KURAL: Çalışanın unvanı ve bölümü '{employee_title}' olarak tanımlıdır. SADECE bu unvana tam uyumlu görev tanımlarını dikkate al, sana sunulan verilerde farklı bölümlerin (Örn: Kalite, Kompozit vb.) görev tanımları yer alıyorsa bunları KESİNLİKLE REDDET ve 'Görev tanımı bulunmamaktadır' kabul et. Reddedilen belgelerin adlarından asla bahsetme.\n"
             "[ÇALIŞANIN GÖREV TANIMI]\n"
             + ("Görev tanımı mevcut değil." if _is_empty(job_desc_ctx) else job_desc_ctx)
             + "\n\n[GEÇMİŞ GERİ BİLDİRİMLER]\n"
@@ -893,11 +895,11 @@ class Analyzer:
         rag_query = f"{employee_name} {target_type} {message}"
         context = self.vector_store.get_context(rag_query)
 
-        # Kalıtatif bağlam: görev tanımı + geri bildirimler (Hibrit RAG)
-        job_desc_ctx = self.vector_store.get_context(
-            f"{employee_title or target_type} görev sorumluluk yetkinlik",
-            top_k=3, position_name=employee_title
-        )
+        # Kalıtatif bağlam: görev tanımı (SQL) + geri bildirimler (Hibrit RAG)
+        from src.data_loader import DataLoader
+        loader_ai2 = DataLoader()
+        exact_job_desc = loader_ai2.get_exact_job_description(employee_title)
+        job_desc_ctx = f"📌 [SQL Veritabanı | {employee_title}]\n{exact_job_desc}" if exact_job_desc else ""
         feedback_ctx = self.vector_store.get_context(
             f"{employee_name} teknik sosyal gelişim geri bildirim",
             top_k=3, sicil_no=sicil_no
@@ -905,6 +907,7 @@ class Analyzer:
         _is_empty = lambda s: not s or "BİLGİ" in s or "HATA" in s
         kurumsal_baglaml = (
             "\n=== KURUMSAL BAĞLAM VE GERİ BİLDİRİMLER ===\n\n"
+            f"DİKKAT KATI KURAL: Çalışanın unvanı ve bölümü '{employee_title}' olarak tanımlıdır. Sana aşağıdaki RAG metinlerinde sunulacak olan görev tanımları arasında SADECE bu unvan/bölüme uyanları dikkate al. Başka bölümlere (Örn: Kalite Teknisyeni, Kompozit Teknisyeni vb.) ait görev tanımları geldiyse, BUNLARI KESİNLİKLE OKUMA/REDDET ve kullanıcıya 'Çalışana ait görev tanımı belgesi sistemde bulunamadı' de. Reddedilen dosyaların veya kaynakların adından ASLA bahsetme.\n\n"
             "[ÇALIŞANIN GÖREV TANIMI]\n"
             + ("Görev tanımı mevcut değil." if _is_empty(job_desc_ctx) else job_desc_ctx)
             + "\n\n[GEÇMİŞ GERİ BİLDİRİMLER]\n"
@@ -934,6 +937,11 @@ class Analyzer:
         else:
             goal_context = "\n        === HENÜZ BELİRLENMİŞ HEDEF SETİ YOK ===\n"
 
+        from src.data_loader import DataLoader
+        loader_ai = DataLoader()
+        approved_goals_text = loader_ai.get_approved_annual_goals(sicil_no, target_type)
+        approved_goals_ctx = f"\n=== MEVCUT ONAYLI YENİ YIL HEDEFLERİ ===\n{approved_goals_text}\n"
+
         dynamic_system = self.build_system_prompt("CHAT") + f"""
 
         === YETKİ KISITLAMASI (ZORUNLU) ===
@@ -949,6 +957,8 @@ class Analyzer:
         {metadata_context if metadata_context else f"Çalışan: {employee_name}, Kategori: {target_type}"}
 
         {goal_context}
+        
+        {approved_goals_ctx}
 
         {kurumsal_baglaml}
 

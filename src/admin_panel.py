@@ -100,8 +100,25 @@ def render_admin_dashboard():
         st.warning("⛔ Bu panel yalnızca Admin yetkisine sahip kullanıcılara açıktır.")
         return
 
-    st.markdown("## 🛡️ Sistem Yönetim Paneli")
-    st.markdown("---")
+    from src.data_loader import DataLoader
+    from src.ui_components import render_header
+
+    loader = DataLoader()
+    admin_sicil = st.session_state.get('user_id')
+    admin_info = loader.get_logged_in_user_info(admin_sicil) if admin_sicil else {}
+    
+    admin_name = admin_info.get("Name", "Sistem Yöneticisi")
+    admin_metadata = {
+        "Sicil": admin_info.get("Sicil", admin_sicil),
+        "Unvan": admin_info.get("Unvan", "Admin"),
+        "Bölüm Ana Sorumluluk Alanı": admin_info.get("Bölüm Ana Sorumluluk Alanı", "Yönetim")
+    }
+    
+    render_header(
+        employee_name=admin_name,
+        target_type="Sistem Yönetim Paneli",
+        metadata=admin_metadata
+    )
 
     st.markdown("""
     <style>

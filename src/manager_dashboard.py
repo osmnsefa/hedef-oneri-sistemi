@@ -118,17 +118,27 @@ def render_manager_dashboard():
     # CSS Uygula
     st.markdown(_CSS, unsafe_allow_html=True)
 
+    loader = DataLoader()
+
     # HEADER
-    mgr_name = st.session_state.get('user_id', 'Yönetici')
-    st.markdown(textwrap.dedent(f"""\
-    <div class="mgr-header">
-        <h1>📊 Ekip Genel Bakış</h1>
-        <p>Sicil: <b>{mgr_name}</b> — Ekibinizin anlık performans ve hedef durumu</p>
-    </div>
-    """), unsafe_allow_html=True)
+    from src.ui_components import render_header
+    mgr_sicil = st.session_state.get('user_id')
+    mgr_info = loader.get_logged_in_user_info(mgr_sicil) if mgr_sicil else {}
+    
+    mgr_name = mgr_info.get("Name", "Yönetici")
+    mgr_metadata = {
+        "Sicil": mgr_info.get("Sicil", mgr_sicil),
+        "Unvan": mgr_info.get("Unvan", "Yönetici"),
+        "Bölüm Ana Sorumluluk Alanı": mgr_info.get("Bölüm Ana Sorumluluk Alanı", "Yönetim")
+    }
+    
+    render_header(
+        employee_name=mgr_name,
+        target_type="Ekip Genel Bakış",
+        metadata=mgr_metadata
+    )
 
     # VERİ YÜKLEMESİ
-    loader = DataLoader()
     with st.spinner("Ekip verileri analiz ediliyor…"):
         df_perf  = loader.get_team_performance_summary(allowed_sicils)
         df_goals = loader.get_team_goal_assignment_stats(allowed_sicils)

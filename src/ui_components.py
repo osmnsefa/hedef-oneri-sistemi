@@ -2,12 +2,12 @@ import streamlit as st
 
 def load_custom_css():
     st.markdown("""
-    <style>
+<style>
         /* Ana Arka Plan ve Fontlar */
-        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap');
         
         html, body, [class*="css"] {
-            font-family: 'Outfit', sans-serif;
+            font-family: 'Inter', 'Outfit', sans-serif;
             background-color: #f0f4f9;
         }
         
@@ -20,41 +20,243 @@ def load_custom_css():
             margin-bottom: 1.5rem;
         }
         
-        /* ===== SIDEBAR — Koyu Lacivert (app.py'deki beyaz metinler için şart) ===== */
+        /* ===== SIDEBAR — Açık Gri / Soft Beyaz (Referans UI stili) ===== */
         section[data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #1e3a5f 0%, #162d4a 100%);
-            border-right: none;
+            background-color: #f8fafc !important;
+            border-right: 1px solid #e2e8f0 !important;
         }
-        section[data-testid="stSidebar"] * {
-            color: #e2e8f0 !important;
+        /* Hyper-focused widget ve özel sınıf stilleri (Streamlit iç elemanlarını bozmaz) */
+        section[data-testid="stSidebar"] .stSelectbox label,
+        section[data-testid="stSidebar"] .stTextArea label,
+        section[data-testid="stSidebar"] .stTextInput label,
+        section[data-testid="stSidebar"] p,
+        .sidebar-profile-card *,
+        .sidebar-menu-header *,
+        .sidebar-menu-subtitle,
+        .sidebar-active-btn,
+        .sidebar-inactive-btn,
+        .sidebar-logout-btn {
+            font-family: 'Inter', 'Outfit', sans-serif !important;
+            color: #334155 !important;
         }
         section[data-testid="stSidebar"] h1,
-        section[data-testid="stSidebar"] h2,
-        section[data-testid="stSidebar"] h3 {
-            color: #ffffff !important;
+        section[data-testid="stSidebar"] h2 {
+            color: #0f172a !important;
+            font-family: 'Inter', 'Outfit', sans-serif !important;
         }
+        section[data-testid="stSidebar"] h3 {
+            font-size: 0.82rem !important;
+            font-weight: 700 !important;
+            color: #475569 !important;
+            text-transform: uppercase !important;
+            letter-spacing: 0.05em !important;
+            margin-top: 1.5rem !important;
+            margin-bottom: 0.75rem !important;
+        }
+        
+        /* Profil Kartı Tasarımı */
+        .sidebar-profile-card {
+            background-color: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 0.85rem 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+            margin-bottom: 1.25rem;
+            margin-top: 0.5rem;
+        }
+        .profile-avatar {
+            font-size: 1.3rem;
+            color: #6366f1;
+            background-color: #f5f3ff;
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .profile-info {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .profile-name {
+            font-weight: 600;
+            color: #0f172a;
+            font-size: 0.9rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .profile-title {
+            color: #64748b;
+            font-size: 0.75rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-top: 1px;
+        }
+        
+        /* Menü Başlığı ve Bölümleri */
+        .sidebar-menu-header {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 0.25rem 0.25rem 0.25rem;
+        }
+        .menu-icon {
+            font-size: 1.05rem;
+            color: #64748b;
+        }
+        .menu-title {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: #475569;
+        }
+        .sidebar-menu-subtitle {
+            font-size: 0.78rem;
+            color: #64748b;
+            padding-left: 1.85rem;
+            margin-top: -0.1rem;
+        }
+        .menu-divider {
+            border-top: 1px solid #e2e8f0 !important;
+            margin: 1.25rem 0 !important;
+        }
+        
+        /* Selectbox ve Form Elemanları */
         section[data-testid="stSidebar"] .stSelectbox label,
         section[data-testid="stSidebar"] .stTextArea label,
         section[data-testid="stSidebar"] .stTextInput label {
-            color: #94a3b8 !important;
-            font-size: 0.82rem;
-            font-weight: 500;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
+            color: #475569 !important;
+            font-size: 0.8rem !important;
+            font-weight: 600 !important;
+            letter-spacing: 0.01em !important;
+            margin-bottom: 0.4rem !important;
+            text-transform: none !important;
         }
         section[data-testid="stSidebar"] .stSelectbox > div > div,
         section[data-testid="stSidebar"] .stTextArea textarea,
         section[data-testid="stSidebar"] .stTextInput input {
-            background-color: #1a2f4a !important;
-            border: 1px solid rgba(255,255,255,0.25) !important;
+            background-color: #ffffff !important;
+            border: 1px solid #e2e8f0 !important;
             border-radius: 8px !important;
-            color: #ffffff !important;
+            color: #0f172a !important;
             font-weight: 500 !important;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04) !important;
+            transition: all 0.2s ease-in-out !important;
         }
-        section[data-testid="stSidebar"] hr {
-            border-color: rgba(255,255,255,0.12) !important;
+        section[data-testid="stSidebar"] .stSelectbox > div > div:hover,
+        section[data-testid="stSidebar"] .stTextArea textarea:hover,
+        section[data-testid="stSidebar"] .stTextInput input:hover {
+            border-color: #cbd5e1 !important;
+        }
+        section[data-testid="stSidebar"] .stSelectbox > div > div:focus-within,
+        section[data-testid="stSidebar"] .stTextArea textarea:focus,
+        section[data-testid="stSidebar"] .stTextInput input:focus {
+            border-color: #6366f1 !important;
+            box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.1) !important;
         }
         
+        /* Modern Menü ve Buton Sınıfları */
+        .sidebar-active-btn {
+            background-color: #eff6ff !important; /* Soft Açık Mavi arka plan */
+            color: #1e40af !important; /* Kurumsal Mavi yazı */
+            border: none !important;
+            border-radius: 8px !important;
+            font-weight: 600 !important;
+            padding: 0.55rem 0.85rem !important;
+            display: flex !important;
+            align-items: center !important;
+            gap: 0.5rem !important;
+            margin-bottom: 0.35rem !important;
+            width: 100% !important;
+            text-align: left !important;
+            box-shadow: 0 1px 2px rgba(37, 99, 235, 0.05) !important;
+            transition: all 0.2s ease-in-out !important;
+        }
+        
+        .sidebar-inactive-btn {
+            background: transparent !important;
+            border: none !important;
+            color: #475569 !important;
+            border-radius: 8px !important;
+            font-weight: 500 !important;
+            padding: 0.55rem 0.85rem !important;
+            display: flex !important;
+            align-items: center !important;
+            gap: 0.5rem !important;
+            margin-bottom: 0.35rem !important;
+            width: 100% !important;
+            text-align: left !important;
+            transition: all 0.2s ease-in-out !important;
+        }
+        .sidebar-inactive-btn:hover {
+            background-color: #f1f5f9 !important;
+            color: #1e293b !important;
+        }
+        
+        .sidebar-logout-btn {
+            background-color: #ffffff !important;
+            border: 1px solid #e2e8f0 !important;
+            color: #dc2626 !important;
+            border-radius: 8px !important;
+            font-weight: 600 !important;
+            padding: 0.65rem 1rem !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            gap: 0.5rem !important;
+            margin-top: 1.5rem !important;
+            margin-bottom: 0.5rem !important;
+            width: 100% !important;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02) !important;
+            transition: all 0.2s ease-in-out !important;
+        }
+        .sidebar-logout-btn:hover {
+            background: #fef2f2 !important;
+            border-color: #fee2e2 !important;
+            color: #b91c1c !important;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 6px rgba(220, 38, 38, 0.05) !important;
+        }
+        .sidebar-logout-btn:active {
+            transform: translateY(0);
+        }
+        
+        section[data-testid="stSidebar"] hr {
+            border-color: #e2e8f0 !important;
+        }
+    </style>
+    
+<!-- Buton Sınıflarını Dinamik Olarak Yöneten JS Enjektörü -->
+<img src="x" onerror="
+const doc = window.parent.document;
+function applySidebarButtonStyles() {
+    const sidebarButtons = doc.querySelectorAll('section[data-testid=\\'stSidebar\\'] button');
+    sidebarButtons.forEach(btn => {
+        const text = btn.innerText || '';
+        if (text.includes('Çıkış Yap')) {
+            btn.classList.add('sidebar-logout-btn');
+            btn.classList.remove('sidebar-active-btn', 'sidebar-inactive-btn');
+        } else if (text.includes('Yeni Sohbet') || text.includes('🟢')) {
+            btn.classList.add('sidebar-active-btn');
+            btn.classList.remove('sidebar-inactive-btn', 'sidebar-logout-btn');
+        } else if (text.includes('Temizle') || text.includes('Kaldır') || text.includes('🧹') || text.includes('♻️')) {
+            btn.classList.add('sidebar-inactive-btn');
+            btn.classList.remove('sidebar-active-btn', 'sidebar-logout-btn');
+        }
+    });
+}
+const observer = new MutationObserver((mutations) => { applySidebarButtonStyles(); });
+observer.observe(doc.body, { childList: true, subtree: true });
+applySidebarButtonStyles();
+" style="display:none;">
+    
+<style>
         /* Başlıklar */
         h1, h2, h3 {
             color: #1e293b;
@@ -62,28 +264,57 @@ def load_custom_css():
             letter-spacing: -0.02em;
         }
         
-        /* Kart Tasarımları */
-        div.stButton > button:first-child {
-            background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%);
-            color: white;
+        /* Ana Ekran Kart Tasarımları (Sidebar Harici) */
+        section.main div.stButton > button:first-child {
+            background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+            color: #ffffff !important;
             border-radius: 12px;
-            font-weight: 600;
+            font-weight: 600 !important;
             padding: 0.8rem 1.2rem;
             border: none;
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             width: 100%;
-            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
             text-transform: none;
         }
         
-        div.stButton > button:first-child:hover {
+        section.main div.stButton > button:first-child:hover {
             transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(37, 99, 235, 0.3);
-            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            box-shadow: 0 6px 20px rgba(59, 130, 246, 0.25);
+            background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
         }
         
-        div.stButton > button:active {
+        section.main div.stButton > button:active {
             transform: translateY(0);
+        }
+
+        /* Sidebar Varsayılan Buton Tasarımları */
+        section[data-testid="stSidebar"] div.stButton > button:first-child {
+            background-color: #ffffff;
+            border: 1px solid #e2e8f0;
+            color: #475569 !important;
+            border-radius: 8px;
+            font-weight: 600 !important;
+            padding: 0.55rem 0.85rem;
+            display: flex;
+            justify-content: center;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+            transition: all 0.2s ease-in-out;
+            width: 100%;
+        }
+        
+        section[data-testid="stSidebar"] div.stButton > button:first-child:hover {
+            border-color: #cbd5e1;
+            background-color: #f8fafc;
+            color: #0f172a !important;
+        }
+
+        /* Popover 3 Nokta Butonu Oku ve İngilizce Yardımcı Metinleri (Press Enter...) Gizleme */
+        div[data-testid="stPopover"] button svg {
+            display: none !important;
+        }
+        div[data-testid="InputInstructions"] {
+            display: none !important;
         }
 
         /* Chat Mesajları */
@@ -135,7 +366,7 @@ def load_custom_css():
         }
 
         .stTabs [aria-selected="true"] {
-            background-color: #2563eb !important;
+            background-color: #3b82f6 !important;
             color: white !important;
         }
         
@@ -167,45 +398,33 @@ def render_header(employee_name="", target_type="", metadata=None):
     """Uygulamanın üst banner'ını render eder."""
     subtitle = "Yapay Zeka Destekli Yeni Nesil Performans Yönetim Sistemi"
 
-    st.markdown(f"""
-    <div style="
-        background: linear-gradient(135deg, #1e3a5f 0%, #2563eb 60%, #3b82f6 100%);
-        padding: 2rem 2.5rem;
-        border-radius: 16px;
-        margin-bottom: 1.5rem;
-        box-shadow: 0 4px 24px rgba(37,99,235,0.25);
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    ">
-        <div>
-            <h1 style="color:#ffffff; font-size:2rem; margin:0; font-weight:800; letter-spacing:-0.5px;">
-                🚀 Stratejik PMS
-            </h1>
-            <p style="color:rgba(255,255,255,0.75); font-size:0.95rem; margin:0.3rem 0 0 0; font-weight:400;">
-                {subtitle}
-            </p>
-        </div>
-        <div style="text-align:right;">
-            <div style="
-                background: rgba(255,255,255,0.15);
-                border-radius: 12px;
-                padding: 0.8rem 1.4rem;
-                backdrop-filter: blur(10px);
-                border: 2px solid rgba(255,255,255,0.4);
-            ">
-                <p style="color:rgba(255,255,255,0.8); font-size:0.8rem; margin:0; font-weight:600; text-transform:uppercase; letter-spacing:0.06em;">Aktif Oturum</p>
-                <p style="color:#ffffff; font-size:1.3rem; margin:0.2rem 0 0.1rem 0; font-weight:900; display:flex; align-items:center; justify-content:flex-end; gap:8px;">
-                    <span>{employee_name if employee_name else "—"}</span>
-                    {f'<span style="background-color: #3b82f6; color: #ffffff; font-size: 0.65rem; padding: 3px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2);">{metadata.get("Bölüm Ana Sorumluluk Alanı")}</span>' if metadata and metadata.get("Bölüm Ana Sorumluluk Alanı") else ''}
-                </p>
-                <p style="color:rgba(255,255,255,0.8); font-size:0.85rem; margin:0; font-weight:500;">
-                    {target_type if target_type else "Hedef seçilmedi"}
-                </p>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    # Bölüm bilgisi varsa al
+    dept_span = ""
+    if metadata and metadata.get("Bölüm Ana Sorumluluk Alanı"):
+        dept_name = metadata.get("Bölüm Ana Sorumluluk Alanı")
+        dept_span = f'<span style="background-color: #3b82f6; color: #ffffff; font-size: 0.65rem; padding: 3px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2);">{dept_name}</span>'
+
+    emp_name_val = employee_name if employee_name else "—"
+    target_type_val = target_type if target_type else "Hedef seçilmedi"
+
+    html_code = f"""<div style="background: linear-gradient(135deg, #1d4ed8 0%, #3b82f6 50%, #60a5fa 100%); padding: 2rem 2.5rem; border-radius: 16px; margin-bottom: 1.5rem; box-shadow: 0 4px 24px rgba(59,130,246,0.18); display: flex; justify-content: space-between; align-items: center;">
+<div>
+<h1 style="color:#ffffff; font-size:2rem; margin:0; font-weight:800; letter-spacing:-0.5px;">🚀 Stratejik PMS</h1>
+<p style="color:rgba(255,255,255,0.75); font-size:0.95rem; margin:0.3rem 0 0 0; font-weight:400;">{subtitle}</p>
+</div>
+<div style="text-align:right;">
+<div style="background: rgba(255,255,255,0.15); border-radius: 12px; padding: 0.8rem 1.4rem; backdrop-filter: blur(10px); border: 2px solid rgba(255,255,255,0.4);">
+<p style="color:rgba(255,255,255,0.8); font-size:0.8rem; margin:0; font-weight:600; text-transform:uppercase; letter-spacing:0.06em;">Aktif Oturum</p>
+<p style="color:#ffffff; font-size:1.3rem; margin:0.2rem 0 0.1rem 0; font-weight:900; display:flex; align-items:center; justify-content:flex-end; gap:8px;">
+<span>{emp_name_val}</span>
+{dept_span}
+</p>
+<p style="color:rgba(255,255,255,0.8); font-size:0.85rem; margin:0; font-weight:500;">{target_type_val}</p>
+</div>
+</div>
+</div>"""
+
+    st.markdown(html_code, unsafe_allow_html=True)
 
     # Metadata bilgileri (varsa) kartlar halinde göster
     if metadata and isinstance(metadata, dict) and len(metadata) > 0:
