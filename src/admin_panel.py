@@ -43,6 +43,8 @@ def _load_all_ph(dept=None, emp_sicil=None) -> pd.DataFrame:
                 "Gerçekleşen":      r.gerceklesen_deger,
                 "Sonuç":            r.sonuc,
             })
+        if not data:
+            return pd.DataFrame(columns=["Sicil", "İsim", "Bölüm", "Unvan", "Yıl", "Hedef Türü", "SMART Hedef", "Hedef Değeri", "Gerçekleşen", "Sonuç"])
         return pd.DataFrame(data)
     finally:
         session.close()
@@ -77,9 +79,11 @@ def _load_locked_goals(dept=None, emp_sicil=None) -> pd.DataFrame:
                 "Vizyon Hırs Düzeyi": getattr(g, "vision_ambition_level", None) or "Bilinmiyor",
                 "Kesinleştiren": g.locked_by_sicil
             })
+        if not data:
+            return pd.DataFrame(columns=["Sicil", "İsim", "Bölüm", "Yıl", "Hedef Türü", "SMART Hedef", "Hedef Değeri", "Hedef Yönü", "Vizyon Hırs Düzeyi", "Kesinleştiren"])
         return pd.DataFrame(data)
     except Exception:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=["Sicil", "İsim", "Bölüm", "Yıl", "Hedef Türü", "SMART Hedef", "Hedef Değeri", "Hedef Yönü", "Vizyon Hırs Düzeyi", "Kesinleştiren"])
     finally:
         session.close()
 
@@ -356,7 +360,7 @@ def render_admin_dashboard():
                             return "🔬 Mikro Yönetici"
                         if row["AvgDuration"] > 30 and (5 <= row["AvgRevision"] <= 20) and row["AvgChat"] > 0:
                             return "🤝 Stratejik İş Birlikçi"
-                        if row["AvgDuration"] < 10 and row["AvgRevision"] == 0.0:
+                        if row["AvgDuration"] < 30 and row["AvgRevision"] == 0.0:
                             return "🙈 Kör Onaycı"
                         return "Dengeli Yönetici"
                         

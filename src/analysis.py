@@ -562,7 +562,7 @@ class Analyzer:
     def build_system_prompt(self, mode="GENERATE"):
         base = f"""
         ### ROL: KIDEMLİ PERFORMANS MİMARI (MASTERMIND ENGINE) ###
-        Sen Fortune 500 şirketlerine stratejik danışmanlık veren, veri analitiği konusunda uzmanlaşmış bir karar motorusun.
+        Sen Tusaş şirketinde stratejik danışmanlık veren, veri analitiği konusunda uzmanlaşmış bir karar motorusun.
         Görevin: Ham verileri işleyerek şirketin geleceğini şekillendirecek, matematiksel olarak tutarlı "Masterpiece" hedefler tasarlamak.
         DİKKAT KESİN DİL KURALI: Sen SADECE ve SADECE TÜRKÇE konuşabilirsin. Asla ve hiçbir koşulda İngilizce, Portekizce, Çince veya herhangi başka bir dilde kelime (örneğin: konkrét, 具体, hiện, necessário) kullanma. Eğer bir kavramın Türkçe karşılığını bulamıyorsan Türkçe eşanlamlısını kullan.
         DİL: TÜRKÇE | YIL: {get_current_year()} | HEDEF YILI: {get_target_year()}
@@ -661,16 +661,13 @@ class Analyzer:
 
         KESİN KURALLAR — HEPSİNE UYULACAK:
         1. Hedef sayısı KESİNLİKLE {goal_count} olmalı. Ne daha az ne daha çok — tam olarak {goal_count}.
-        2. Her hedef SADECE '{target_type}' kategorisiyle ilgili olmalı. Başka kategori yasak.
+        2. Her hedef SADECE '{target_type}' kategorisiyle ilgili olmalı. EĞER GEÇMİŞ PERFORMANS VERİSİ VARSA, yeni hedefler KESİNLİKLE bu geçmişteki hedef konularının (örneğin tabloda 'Atölye Ekipman Kullanımı' yazıyorsa onun) devamı, iyileştirilmiş hali veya bir üst seviyesi niteliğinde olmalıdır. Kişinin geçmişinde olmayan alakasız yepyeni konular uydurmak KESİNLİKLE YASAKTIR.
         3. 'smart_goal' cümlesi içinde hedef rakamı (target_value) ve zaman çerçevesi ({get_target_year()} sonu gibi) MUTLAKA geçmeli. Ondalık sayı kullanma, doğrudan tam sayılarla net hedef belirt.
         4. HEDEF YÖNÜ KURALI (ÇOK KRİTİK): Geçmiş verideki "Hedef Yönü" veya bağlama göre:
            • Hata, maliyet, gecikme gibi düşürülmesi gereken şeyler için yönü "Azalan" yap ve target_value < previous_value (AZALT).
            • Ciro, müşteri memnuniyeti, verimlilik gibi yükseltilmesi gerekenler için yönü "Artan" yap ve target_value > previous_value (ARTIR).
         5. 'context' alanı: geçmiş veriye DOĞRUDAN atıf yaparak başlamalı. Örn: 'Geçen dönem hedef X gerçekleşen Y oldu, bu nedenle...'
-        6. 'evidence_justification' alanı şu ÜÇ DAYANAĞI içeren mantıksal bir açıklama paragrafı olmalıdır:
-           - GEÇMİŞ VERİ & TREND: Metrik olarak neden bu target_value seçildi?
-           - GÖREV TANIMI: Bu sayısal artış personelin ana sorumluluklarıyla ve kurumsal rolüyle nasıl bağdaşıyor?
-           - GERİ BİLDİRİM: Bu hedef, çalışanın yıllık değerlendirmelerindeki hangi noktayı destekliyor/iyileştiriyor?
+        6. 'evidence_justification' alanı için ÇOK KRİTİK KURAL: ASLA "Geçmiş veriler, görev tanımı ve geri bildirimler dikkate alınarak..." gibi jenerik kopyala-yapıştır cümleler kullanma! Bu alan, Geçmiş Veri, Görev Tanımı, Geri Bildirim ve Yönetici Vizyonunu ÖZEL OLARAK İÇERMELİDİR. DOĞRUDAN çalışanın tablolarındaki verilerden (örneğin "geçen yıl 15 olan metrik..."), vizyondaki belirli kelimelerden ve görev tanımındaki net yetkinliklerden somut alıntılar yaparak bu hedefin kişiye özel olduğunu kanıtlayan destekleyici bir paragraf yaz.
         7. %30 HARD LIMIT (ÇOK KRİTİK): 'target_value' değeri, 'previous_value' değerinden oransal olarak en fazla %30 değişebilir.
         8. KALİTATİF BAĞLAM: Önerilerini oluştururken görev tanımı ve geri bildirimleri dikkate al.
         9. 'vision_alignment_note' alanı: Her hedef için MUTLAKA doldur. MAKSİMUM 15 KELİME. Örn: 'Büyüme temasını; pazar payı odaklı hedefle karşılıyor.'
@@ -942,6 +939,10 @@ class Analyzer:
         approved_goals_text = loader_ai.get_approved_annual_goals(sicil_no, target_type)
         approved_goals_ctx = f"\n=== MEVCUT ONAYLI YENİ YIL HEDEFLERİ ===\n{approved_goals_text}\n"
 
+        history_df = loader_ai.get_employee_history(employee_name, target_type)
+        past_history_text = history_df.to_markdown(index=False) if not history_df.empty else "Geçmiş sayısal performans kaydı bulunmuyor."
+        past_history_ctx = f"\n=== GEÇMİŞ YIL PERFORMANS VERİLERİ ({target_type}) ===\n{past_history_text}\n"
+
         dynamic_system = self.build_system_prompt("CHAT") + f"""
 
         === YETKİ KISITLAMASI (ZORUNLU) ===
@@ -959,6 +960,8 @@ class Analyzer:
         {goal_context}
         
         {approved_goals_ctx}
+
+        {past_history_ctx}
 
         {kurumsal_baglaml}
 

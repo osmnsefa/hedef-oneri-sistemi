@@ -82,11 +82,17 @@ try:
     # Tablo var mı ve dolu mu kontrolü
     needs_seed = False
     try:
+        from sqlalchemy.exc import OperationalError
         if not _sys_sess.query(User).first():
             needs_seed = True
-    except Exception:
-        # Tablo yoksa 'no such table' hatası fırlatır, seed gerekir.
-        needs_seed = True
+    except OperationalError as e:
+        # Sadece tablo gerçekten yoksa seed çalışsın
+        if "no such table" in str(e).lower():
+            needs_seed = True
+        else:
+            logging.error(f"Geçici veritabanı hatası (lock vb.), seed iptal edildi: {e}")
+    except Exception as e:
+        logging.error(f"Beklenmeyen db hatası, seed iptal edildi: {e}")
         
     if needs_seed:
         logging.info("Veritabanı boş veya tablolar eksik, ilk kurulum (seed) yapılıyor...")
