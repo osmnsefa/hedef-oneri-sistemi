@@ -950,9 +950,10 @@ class Analyzer:
         - Çalışan: {employee_name}
         - Hedef Kategorisi: {target_type}
 
-        Bu kapsam DIŞINDA başka çalışan veya kategoriler hakkında ASLA veri paylaşma.
-        Eğer kullanıcı başka biri veya kategori sorarsa, kibarca reddet:
-        "Bu oturumda sadece {employee_name} için '{target_type}' verileri üzerinde çalışıyorum."
+        Sana sunulan {target_type} kategorisindeki "GEÇMİŞ YIL PERFORMANS VERİLERİ"ni okuyarak kullanıcının geçmiş hedefler hakkındaki sorularını detaylıca yanıtlayabilirsin.
+        Ancak, Bu kapsam DIŞINDA başka BİR ÇALIŞAN veya KATEGORİ hakkında ASLA veri paylaşma.
+        Eğer kullanıcı başka bir çalışan veya farklı bir kategori sorarsa, kibarca reddet:
+        "Bu oturumda kısıtlı yetkiyle sadece {employee_name} için '{target_type}' verileri üzerinde çalışıyorum."
 
         === ÇALIŞAN KİMLİK BİLGİLERİ ===
         {metadata_context if metadata_context else f"Çalışan: {employee_name}, Kategori: {target_type}"}

@@ -846,7 +846,9 @@ with tab2:
                             version_no=goal_set.get("version", 1),
                             vision_text=manager_vision,
                             vision_ambition_level=decoded_vision.get("ambition_level"),
-                            vision_stretch_factor=decoded_vision.get("stretch_factor")
+                            vision_stretch_factor=decoded_vision.get("stretch_factor"),
+                            regen_count=st.session_state.get('regen_count', 0),
+                            chat_interaction_count=st.session_state.get('chat_interaction_count', 0)
                         )
                         _lsess.add(new_draft)
                         _lsess.flush()
@@ -1102,11 +1104,17 @@ with tab2:
                                 if "id" in g:
                                     _dg = _lsess.query(AnnualGoals).filter(AnnualGoals.id == g["id"]).first()
                                     if _dg:
+                                        import time
                                         _dg.is_locked = True
                                         _dg.approval_status = 'Locked'
                                         _dg.admin_approval_status = 'Onay Bekliyor'
                                         _dg.locked_by_sicil = st.session_state.get('user_id')
-                                        _dg.ai_status = "Kabul"
+                                        _dg.ai_status = "Revize" if gs.get("version", 1) > 1 else "Kabul"
+                                        _dg.regen_count = st.session_state.get('regen_count', 0)
+                                        _dg.chat_interaction_count = st.session_state.get('chat_interaction_count', 0)
+                                        ai_start = st.session_state.get('ai_start_time')
+                                        _dg.decision_duration = int(time.time() - ai_start) if ai_start else 0
+                                        _dg.revision_depth = 15.0 * (gs.get("version", 1) - 1) if gs.get("version", 1) > 1 else 0.0
                                         _lsess.commit()
                                 else:
                                     current_year = datetime.datetime.now().year + 1
@@ -1118,6 +1126,8 @@ with tab2:
                                         
                                     decoded_v = st.session_state.get('decoded_vision', {})
                                     
+                                    import time
+                                    ai_start = st.session_state.get('ai_start_time')
                                     new_goal = AnnualGoals(
                                         employee_sicil=emp_sicil_for_lock,
                                         yil=current_year,
@@ -1133,10 +1143,14 @@ with tab2:
                                         admin_approval_status='Onay Bekliyor',
                                         locked_by_sicil=st.session_state.get('user_id'),
                                         version_no=gs.get("version", 1),
-                                        ai_status="Kabul",
+                                        ai_status="Revize" if gs.get("version", 1) > 1 else "Kabul",
                                         vision_text=manager_vision,
                                         vision_ambition_level=decoded_v.get("ambition_level"),
-                                        vision_stretch_factor=decoded_v.get("stretch_factor")
+                                        vision_stretch_factor=decoded_v.get("stretch_factor"),
+                                        regen_count=st.session_state.get('regen_count', 0),
+                                        chat_interaction_count=st.session_state.get('chat_interaction_count', 0),
+                                        decision_duration=int(time.time() - ai_start) if ai_start else 0,
+                                        revision_depth=15.0 * (gs.get("version", 1) - 1) if gs.get("version", 1) > 1 else 0.0
                                     )
                                     _lsess.add(new_goal)
                                     _lsess.commit()
@@ -1427,7 +1441,35 @@ with tab4:
                                             new_val = st.number_input("Yeni Hedef Değeri", value=float(_goal.hedef_degeri) if _goal.hedef_degeri else 0.0)
                                             mgr_msg = st.text_area("Admin'e Yanıt / Revizyon Notu (İsteğe Bağlı)", placeholder="Revizyon yaptıysanız gerekçesini ekleyebilirsiniz.")
                                             
-                                            if st.form_submit_button("💾 Revizyonu ve Yanıtı Kaydet"):
+                                            col_f1, col_f2 = st.columns(2)
+                                            with col_f1:
+                                                submit_rev = st.form_submit_button("💾 Revizyonu ve Yanıtı Kaydet")
+                                            with col_f2:
+                                                submit_reply = st.form_submit_button("✉️ Sadece Yanıt Gönder")
+                                            
+                                            if submit_reply:
+                                                if not mgr_msg.strip():
+                                                    st.error("Lütfen bir yanıt metni girin.")
+                                                else:
+                                                    import datetime
+                                                    now_str = datetime.datetime.now().isoformat()
+                                                    new_log = {"role": "Manager", "content": mgr_msg.strip(), "timestamp": now_str}
+                                                    if isinstance(logs, list):
+                                                        logs.append(new_log)
+                                                    else:
+                                                        logs = [new_log]
+                                                    
+                                                    _goal.denetim_loglari = list(logs)
+                                                    from sqlalchemy.orm.attributes import flag_modified
+                                                    flag_modified(_goal, "denetim_loglari")
+                                                    
+                                                    # Eğer Onay Bekliyor ise veya Revizyon Bekliyor ise durum aynı kalabilir 
+                                                    # Sadece log ekliyoruz
+                                                    _asess.commit()
+                                                    st.success("✅ Yanıtınız Admin'e iletildi.")
+                                                    st.rerun()
+
+                                            if submit_rev:
                                                 val_res = analyzer.validate_manual_revision(_goal.hedef_degeri, new_val, getattr(_goal, 'hedef_yonu', 'Artan'))
                                                 if not val_res["valid"]:
                                                     st.error(val_res["error"])
@@ -1488,15 +1530,15 @@ with tab4:
                                         for s in sessions_ai:
                                             sess_options[s['id']] = f"📝 {s['title']} ({s['updated_at'].strftime('%d.%m %H:%M')})"
                                             
-                                        selected_sess_key = st.selectbox("Hedef ve revizyon isteği hangi sohbete aktarılsın?", options=list(sess_options.keys()), format_func=lambda x: sess_options[x], key=f"sess_sel_{_goal.id}")
+                                        selected_sess_key = st.selectbox("Hedef ve revizyon isteği hangi sohbete aktarılsın?", options=list(sess_options.keys()), format_func=lambda x: sess_options[x], key=f"sess_sel_mgr_{_goal.id}")
                                         
-                                        ai_req = st.text_input("Hedef için AI'dan ne istiyorsunuz?", placeholder="Örn: Bu hedefi daha vizyoner bir dille yaz.", key=f"ai_req_{_goal.id}")
+                                        ai_req = st.text_input("Hedef için AI'dan ne istiyorsunuz?", placeholder="Örn: Bu hedefi daha vizyoner bir dille yaz.", key=f"ai_req_mgr_{_goal.id}")
                                         
                                         col_btn1, col_btn2 = st.columns([1, 1])
                                         with col_btn1:
-                                            ai_btn_clicked = st.button("✨ AI'dan Revizyon İste", key=f"ai_btn_{_goal.id}", use_container_width=True)
+                                            ai_btn_clicked = st.button("✨ AI'dan Revizyon İste", key=f"ai_btn_mgr_{_goal.id}", use_container_width=True)
                                         with col_btn2:
-                                            if st.button("💬 Sohbete (Asistan) Git", key=f"go_chat_{_goal.id}", use_container_width=True):
+                                            if st.button("💬 Sohbete (Asistan) Git", key=f"go_chat_mgr_{_goal.id}", use_container_width=True):
                                                 st.info("Lütfen sol üstteki '💬 Asistan' sekmesine tıklayarak sohbete geçiş yapın.")
                                         
                                         if ai_btn_clicked:
@@ -1509,7 +1551,7 @@ with tab4:
                                                     import json
                                                     try:
                                                         resp_json = json.loads(resp)
-                                                        st.session_state[f'ai_suggest_{_goal.id}'] = resp_json
+                                                        st.session_state[f'ai_suggest_mgr_{_goal.id}'] = resp_json
                                                         
                                                         import datetime
                                                         now = datetime.datetime.now()
@@ -1534,10 +1576,10 @@ with tab4:
                                                     except:
                                                         st.error("AI yanıtı JSON olarak alınamadı.")
                                                     
-                                        if st.session_state.get(f'ai_suggest_{_goal.id}'):
-                                            ai_sug = st.session_state[f'ai_suggest_{_goal.id}']
+                                        if st.session_state.get(f'ai_suggest_mgr_{_goal.id}'):
+                                            ai_sug = st.session_state[f'ai_suggest_mgr_{_goal.id}']
                                             st.info(f"**AI Önerisi:**\n\nSMART Hedef: {ai_sug.get('smart_hedef')}\nDeğer: {ai_sug.get('hedef_degeri')}")
-                                            if st.button("✅ AI Önerisini Onayla ve Kaydet (Human Oversight)", key=f"ai_approve_{_goal.id}", type="primary"):
+                                            if st.button("✅ AI Önerisini Onayla ve Kaydet (Human Oversight)", key=f"ai_approve_mgr_{_goal.id}", type="primary"):
                                                 val_res = analyzer.validate_manual_revision(_goal.hedef_degeri, ai_sug.get('hedef_degeri', _goal.hedef_degeri), getattr(_goal, 'hedef_yonu', 'Artan'))
                                                 if not val_res["valid"]:
                                                     st.error(f"AI Önerisi kısıtlamalara takıldı: {val_res['error']}")
